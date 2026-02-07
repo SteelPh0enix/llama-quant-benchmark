@@ -9,3 +9,4 @@ __pycache__/
 *.gguf
 *.egg-info
 .env
+.coverage
