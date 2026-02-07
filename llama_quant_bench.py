@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-LLaMA Quantization Benchmark Tool
+"""LLaMA Quantization Benchmark Tool
 
 Benchmarks different quantization types using llama-quantize and llama-bench.
 """
@@ -15,8 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # =============================================================================
 # EXIT CODES - Explicit values for clarity
@@ -43,7 +41,9 @@ PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
 TOKEN_GENERATION_TESTS = [128, 256, 512]  # tg128, tg256, tg512
 DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
-CONVERTER_URL = "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/convert_hf_to_gguf.py"
+CONVERTER_URL = (
+    "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/convert_hf_to_gguf.py"
+)
 
 
 # =============================================================================
@@ -70,8 +70,8 @@ class BenchmarkReport:
     model_name: str
     model_params: str
     backend: str
-    llama_bench_args: List[str]
-    results: List[BenchmarkResult]
+    llama_bench_args: list[str]
+    results: list[BenchmarkResult]
     generated_at: datetime.datetime
 
 
@@ -88,14 +88,11 @@ class QuantizationType:
 # =============================================================================
 
 
-def get_available_quants() -> Dict[str, QuantizationType]:
-    """
-    Get available quantization types by running llama-quantize --help.
+def get_available_quants() -> dict[str, QuantizationType]:
+    """Get available quantization types by running llama-quantize --help.
     Returns a mapping of names/IDs to QuantizationType objects.
     """
-    result = subprocess.run(
-        ["llama-quantize", "--help"], capture_output=True, text=True
-    )
+    result = subprocess.run(["llama-quantize", "--help"], capture_output=True, text=True)
 
     output = result.stdout + result.stderr
 
@@ -118,10 +115,10 @@ def get_available_quants() -> Dict[str, QuantizationType]:
 
 
 def parse_user_quants(
-    user_input: str, available_quants: Dict[str, QuantizationType]
-) -> List[QuantizationType]:
-    """
-    Parse user-provided quantization list.
+    user_input: str,
+    available_quants: dict[str, QuantizationType],
+) -> list[QuantizationType]:
+    """Parse user-provided quantization list.
     Validates that all items are either names or IDs (not mixed).
     """
     items = [item.strip() for item in user_input.split(",")]
@@ -141,7 +138,7 @@ def parse_user_quants(
 
     if has_name and has_id:
         raise ValueError(
-            "Cannot mix quantization names and IDs. Use either names (e.g., Q4_K) or IDs (e.g., 15) but not both."
+            "Cannot mix quantization names and IDs. Use either names (e.g., Q4_K) or IDs (e.g., 15) but not both.",
         )
 
     # Validate and return
@@ -159,8 +156,8 @@ def parse_user_quants(
 
 
 def get_default_quants(
-    available_quants: Dict[str, QuantizationType],
-) -> List[QuantizationType]:
+    available_quants: dict[str, QuantizationType],
+) -> list[QuantizationType]:
     """Get default list of all quantization types (unique by ID)."""
     seen_ids = set()
     result = []
@@ -246,12 +243,11 @@ def infer_model_name(model_path: str) -> str:
     if p.is_dir():
         # HuggingFace directory - use directory name
         return p.name
-    elif p.is_file() and p.suffix == ".gguf":
+    if p.is_file() and p.suffix == ".gguf":
         # GGUF file - use filename without extension
         return p.stem
-    else:
-        # Fallback
-        return p.name
+    # Fallback
+    return p.name
 
 
 # =============================================================================
@@ -259,9 +255,8 @@ def infer_model_name(model_path: str) -> str:
 # =============================================================================
 
 
-def parse_llama_bench_output(output: str) -> List[Dict[str, Any]]:
-    """
-    Parse llama-bench markdown output.
+def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
+    """Parse llama-bench markdown output.
     Returns a list of dictionaries with parsed data.
     """
     results = []
@@ -311,7 +306,7 @@ def parse_llama_bench_output(output: str) -> List[Dict[str, Any]]:
                             "test": test,
                             "tokens_per_sec": tokens_per_sec,
                             "std_dev": std_dev,
-                        }
+                        },
                     )
                 except (IndexError, ValueError):
                     # Skip malformed lines
@@ -325,9 +320,7 @@ def parse_llama_bench_output(output: str) -> List[Dict[str, Any]]:
 # =============================================================================
 
 
-def quantize_model(
-    input_path: str, output_path: str, quant_type: QuantizationType
-) -> None:
+def quantize_model(input_path: str, output_path: str, quant_type: QuantizationType) -> None:
     """Quantize a model using llama-quantize."""
     print(f"Quantizing to {quant_type.name} (ID: {quant_type.id})...")
     result = subprocess.run(
@@ -348,9 +341,9 @@ def quantize_model(
 
 def run_benchmark(
     model_path: str,
-    test_prompt: Optional[int] = None,
-    test_gen: Optional[int] = None,
-    extra_args: Optional[List[str]] = None,
+    test_prompt: int | None = None,
+    test_gen: int | None = None,
+    extra_args: list[str] | None = None,
 ) -> str:
     """Run llama-bench and return the output."""
     cmd = ["llama-bench", "-m", model_path]
@@ -363,9 +356,7 @@ def run_benchmark(
     if extra_args:
         # Filter out llama-bench specific args that we don't want to pass
         filtered_args = [
-            a
-            for a in extra_args
-            if a not in ("--model", "-m", "-h", "--help", "--list-devices")
+            a for a in extra_args if a not in ("--model", "-m", "-h", "--help", "--list-devices")
         ]
         cmd.extend(filtered_args)
 
@@ -382,9 +373,7 @@ def run_benchmark(
     return result.stdout + result.stderr
 
 
-def run_benchmark_all_tests(
-    model_path: str, extra_args: Optional[List[str]] = None
-) -> str:
+def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None) -> str:
     """Run llama-bench with all configured tests in a single session."""
     # Build comma-separated test values
     pp_values = ",".join(str(pp) for pp in PERPLEXITY_TESTS)
@@ -415,8 +404,10 @@ def run_benchmark_all_tests(
 
 
 def run_full_benchmark(
-    model_path: str, quant_type: str, extra_args: Optional[List[str]] = None
-) -> List[BenchmarkResult]:
+    model_path: str,
+    quant_type: str,
+    extra_args: list[str] | None = None,
+) -> list[BenchmarkResult]:
     """Run all configured benchmarks for a model and return results."""
     results = []
 
@@ -440,7 +431,7 @@ def run_full_benchmark(
                     test_name=p["test"],
                     tokens_per_sec=p["tokens_per_sec"],
                     std_dev=p["std_dev"],
-                )
+                ),
             )
 
     return results
@@ -456,9 +447,7 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     lines = []
 
     # Header
-    lines.append(
-        f"# llama-quant-benchmark for `{report.model_name}` ({report.model_params})"
-    )
+    lines.append(f"# llama-quant-benchmark for `{report.model_name}` ({report.model_params})")
     lines.append("")
 
     if grouping == "quant":
@@ -482,7 +471,7 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
                 size_str = f"{result.model_size_gib:.2f} GiB"
                 tps_str = f"{result.tokens_per_sec:.2f} ± {result.std_dev:.2f}"
                 lines.append(
-                    f"| {result.quant_type} | {size_str} | {result.test_name} | {tps_str} |"
+                    f"| {result.quant_type} | {size_str} | {result.test_name} | {tps_str} |",
                 )
 
     else:  # grouping == "test"
@@ -506,7 +495,7 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
                 size_str = f"{result.model_size_gib:.2f} GiB"
                 tps_str = f"{result.tokens_per_sec:.2f} ± {result.std_dev:.2f}"
                 lines.append(
-                    f"| {result.test_name} | {result.quant_type} | {size_str} | {tps_str} |"
+                    f"| {result.test_name} | {result.quant_type} | {size_str} | {tps_str} |",
                 )
 
     # Footer
@@ -515,9 +504,7 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     lines.append(f"Used backend: `{report.backend}`")
 
     if report.llama_bench_args:
-        lines.append(
-            f"Additional `llama-bench` arguments: `{' '.join(report.llama_bench_args)}`"
-        )
+        lines.append(f"Additional `llama-bench` arguments: `{' '.join(report.llama_bench_args)}`")
 
     return "\n".join(lines)
 
@@ -608,7 +595,7 @@ Examples:
     model_path = args.model
     if not is_huggingface_model(model_path) and not is_gguf_file(model_path):
         print(
-            f"Error: Model path '{model_path}' is neither a HuggingFace model directory nor a GGUF file"
+            f"Error: Model path '{model_path}' is neither a HuggingFace model directory nor a GGUF file",
         )
         sys.exit(ExitCode.INVALID_MODEL_PATH)
 
@@ -685,16 +672,16 @@ Examples:
 
             # Benchmark
             try:
-                results = run_full_benchmark(
-                    str(quant_path), quant_type.name, remaining_args
-                )
+                results = run_full_benchmark(str(quant_path), quant_type.name, remaining_args)
                 all_results.extend(results)
 
                 # Extract backend and params from first result
                 if results and backend == "unknown":
                     # Run a quick test to get backend info
                     test_output = run_benchmark(
-                        str(quant_path), test_prompt=512, extra_args=remaining_args
+                        str(quant_path),
+                        test_prompt=512,
+                        extra_args=remaining_args,
                     )
                     parsed = parse_llama_bench_output(test_output)
                     if parsed:
