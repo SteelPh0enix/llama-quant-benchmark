@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from llama_quant_bench import convert_hf_to_gguf
+
 # =============================================================================
 # CONSTANTS
 # =============================================================================
@@ -29,8 +31,12 @@ LLAMA_QUANTIZE_AVAILABLE = _is_binary_available("llama-quantize")
 LLAMA_BENCH_AVAILABLE = _is_binary_available("llama-bench")
 
 # Skip reasons
-BINARIES_SKIP_REASON = "Required binaries (llama-quantize, llama-bench) not found in PATH"
-MODEL_PATH_SKIP_REASON = f"Test model path not set in {TEST_MODEL_ENV_VAR} environment variable"
+BINARIES_SKIP_REASON = (
+    "Required binaries (llama-quantize, llama-bench) not found in PATH"
+)
+MODEL_PATH_SKIP_REASON = (
+    f"Test model path not set in {TEST_MODEL_ENV_VAR} environment variable"
+)
 
 # =============================================================================
 # FIXTURES
@@ -68,9 +74,31 @@ def test_model_path() -> Path:
     missing_files = [f for f in required_files if not (model_path / f).exists()]
 
     if missing_files:
-        pytest.skip(f"{MODEL_PATH_SKIP_REASON}: Missing required files: {missing_files}")
+        pytest.skip(
+            f"{MODEL_PATH_SKIP_REASON}: Missing required files: {missing_files}"
+        )
 
     return model_path
+
+
+@pytest.fixture(scope="session")
+def gguf_converted_model(test_model_path: Path, temp_output_dir: Path) -> Path:
+    """Fixture converting HuggingFace model to GGUF format for testing.
+
+    Uses the model path from LLAMA_QUANT_BENCH_TEST_MODEL environment variable
+    via the test_model_path fixture, and converts it to GGUF format using
+    the convert_hf_to_gguf function from the main script.
+
+    Args:
+        test_model_path: Fixture providing the validated HF model path.
+        temp_output_dir: Fixture providing a temporary directory.
+
+    Returns:
+        Path to the converted GGUF file.
+    """
+    output_gguf = temp_output_dir / "converted_model.gguf"
+    convert_hf_to_gguf(str(test_model_path), str(output_gguf))
+    return output_gguf
 
 
 @pytest.fixture
@@ -160,7 +188,11 @@ def _test_model_path_exists() -> bool:
     if not model_path_str:
         return False
     model_path = Path(model_path_str)
-    return model_path.exists() and model_path.is_dir() and (model_path / "config.json").exists()
+    return (
+        model_path.exists()
+        and model_path.is_dir()
+        and (model_path / "config.json").exists()
+    )
 
 
 requires_test_model = pytest.mark.skipif(
