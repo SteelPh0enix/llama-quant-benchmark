@@ -28,6 +28,7 @@ dev = [
     "ruff>=0.15.0",
     "pyright>=1.1.408",
     "typing-extensions>=4.15.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.pytest.ini_options]
