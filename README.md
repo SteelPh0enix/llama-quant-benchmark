@@ -34,6 +34,7 @@ Model name will be inferred from directory name (in case of HuggingFace model fo
 - `--keep-quants` - by default, script will delete generated quants after performing benchmarks. Passing this argument disables that and lets you keep generated quants.
 - `--quants <list of quantization types to benchmark, separated by commas>` - by default, script will test all the available quants. This argument can be used to test only a subset.
 - `--output <path to output file>` - by default, the output will be placed in `quant-benchmark-report.md` file in current working directory.
+- `--group <quant|test>` - group results by quantization type or test type (default: `quant`). When grouped, horizontal separators are added between groups in the table.
 
 Remaining arguments will be passed to `llama-bench` for each benchmark (except `--model`, `-h`, `--help`, `--list-devices` which will be filtered out).
 For a list of available quantizations to put in `--quants`, run `llama-quantize --help`.
