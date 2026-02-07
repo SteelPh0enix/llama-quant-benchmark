@@ -121,7 +121,7 @@ def get_available_quants() -> dict[str, QuantizationType]:
     output = result.stdout + result.stderr
 
     # Parse the "Allowed quantization types:" section
-    quants = {}
+    quants: dict[str, QuantizationType] = {}
 
     # Regex pattern: matches lines like "15  or  Q4_K_M  :  4.58G, +0.1754 ppl @ Llama-3-8B"
     # or "  0  or  F32     : 26.00G              @ 7B"
@@ -165,7 +165,7 @@ def parse_user_quants(
         raise ValueError(ERR_MIXED_NAMES_IDS)
 
     # Validate and return
-    result = []
+    result: list[QuantizationType] = []
     for item in items:
         lookup_key = item if item.isdigit() else item.lower()
         if lookup_key not in available_quants:
@@ -182,8 +182,8 @@ def get_default_quants(
     available_quants: dict[str, QuantizationType],
 ) -> list[QuantizationType]:
     """Get default list of all quantization types (unique by ID)."""
-    seen_ids = set()
-    result = []
+    seen_ids: set[int] = set()
+    result: list[QuantizationType] = []
 
     for key, qt in available_quants.items():
         if key.isdigit() and qt.id not in seen_ids:
@@ -285,7 +285,7 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
 
     Returns a list of dictionaries with parsed data.
     """
-    results = []
+    results: list[dict[str, Any]] = []
 
     # Split into lines and look for table rows
     lines = output.split("\n")
@@ -433,7 +433,7 @@ def run_full_benchmark(
     extra_args: list[str] | None = None,
 ) -> list[BenchmarkResult]:
     """Run all configured benchmarks for a model and return results."""
-    results = []
+    results: list[BenchmarkResult] = []
 
     # Run single benchmark session with all tests
     output = run_benchmark_all_tests(model_path, extra_args)
@@ -468,7 +468,7 @@ def run_full_benchmark(
 
 def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     """Generate markdown report with specified grouping."""
-    lines = []
+    lines: list[str] = []
 
     # Header
     lines.append(f"# llama-quant-benchmark for `{report.model_name}` ({report.model_params})")
@@ -621,10 +621,11 @@ def validate_keep_flags(args: argparse.Namespace) -> None:
 def validate_model_path(model_path: str) -> None:
     """Validate that the model path exists and is valid."""
     if not is_huggingface_model(model_path) and not is_gguf_file(model_path):
-        print(
+        msg = (
             f"Error: Model path '{model_path}' is neither a HuggingFace "
-            "model directory nor a GGUF file",
+            "model directory nor a GGUF file"
         )
+        print(msg)
         sys.exit(ExitCode.INVALID_MODEL_PATH)
 
 
