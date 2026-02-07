@@ -31,10 +31,13 @@ Model name will be inferred from directory name (in case of HuggingFace model fo
 
 - `--quant-dir <path to directory where generated quants will be placed>` - by default, script creates a temporary directory (via `tempdir` module) for all the quants.
 - `--model-name <model name>` - this can be used to override the model name, instead of using the name of directory with weights or GGUF file name.
-- `--keep-quants` - by default, script will delete generated quants after performing benchmarks. Passing this argument disables that and lets you keep generated quants.
+- `--keep-quants` - keep generated quants after benchmarking (only useful with `--quant-dir`).
+- `--keep-original-gguf` - keep the original GGUF file after converting from HuggingFace format (only useful with `--quant-dir`).
 - `--quants <list of quantization types to benchmark, separated by commas>` - by default, script will test all the available quants. This argument can be used to test only a subset.
 - `--output <path to output file>` - by default, the output will be placed in `quant-benchmark-report.md` file in current working directory.
 - `--group <quant|test>` - group results by quantization type or test type (default: `quant`). When grouped, horizontal separators are added between groups in the table.
+
+**Note:** The `--keep-quants` and `--keep-original-gguf` flags require `--quant-dir` to be set. When using a temporary directory (default behavior), all files are always deleted after benchmarking.
 
 Remaining arguments will be passed to `llama-bench` for each benchmark (except `--model`, `-h`, `--help`, `--list-devices` which will be filtered out).
 For a list of available quantizations to put in `--quants`, run `llama-quantize --help`.

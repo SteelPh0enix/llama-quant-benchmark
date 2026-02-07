@@ -13,8 +13,27 @@ import sys
 import tempfile
 import urllib.request
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+# =============================================================================
+# EXIT CODES - Explicit values for clarity
+# =============================================================================
+
+
+class ExitCode(IntEnum):
+    """Exit codes for the benchmarking script."""
+
+    SUCCESS = 0
+    INVALID_ARGUMENTS = 1
+    INVALID_MODEL_PATH = 2
+    QUANT_FETCH_FAILED = 3
+    QUANT_PARSE_ERROR = 4
+    MODEL_CONVERSION_FAILED = 5
+    NO_RESULTS = 6
+
 
 # =============================================================================
 # GLOBAL CONFIGURATION - Easy to modify
@@ -363,41 +382,62 @@ def run_benchmark(
     return result.stdout + result.stderr
 
 
+def run_benchmark_all_tests(
+    model_path: str, extra_args: Optional[List[str]] = None
+) -> str:
+    """Run llama-bench with all configured tests in a single session."""
+    # Build comma-separated test values
+    pp_values = ",".join(str(pp) for pp in PERPLEXITY_TESTS)
+    tg_values = ",".join(str(tg) for tg in TOKEN_GENERATION_TESTS)
+
+    cmd = ["llama-bench", "-m", model_path, "-p", pp_values, "-n", tg_values]
+
+    if extra_args:
+        # Filter out llama-bench specific args that we don't want to pass
+        filtered_args = [
+            a
+            for a in extra_args
+            if a not in ("--model", "-m", "-h", "--help", "--list-devices", "-p", "-n")
+        ]
+        cmd.extend(filtered_args)
+
+    print(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Benchmark failed: {result.stderr}")
+
+    return result.stdout + result.stderr
+
+
 def run_full_benchmark(
     model_path: str, quant_type: str, extra_args: Optional[List[str]] = None
 ) -> List[BenchmarkResult]:
     """Run all configured benchmarks for a model and return results."""
     results = []
 
-    # Run perplexity tests
-    for pp in PERPLEXITY_TESTS:
-        output = run_benchmark(model_path, test_prompt=pp, extra_args=extra_args)
-        parsed = parse_llama_bench_output(output)
+    # Run single benchmark session with all tests
+    output = run_benchmark_all_tests(model_path, extra_args)
+    parsed = parse_llama_bench_output(output)
 
-        for p in parsed:
+    # Create set of valid test names for filtering
+    valid_tests = {f"pp{pp}" for pp in PERPLEXITY_TESTS} | {
+        f"tg{tg}" for tg in TOKEN_GENERATION_TESTS
+    }
+
+    for p in parsed:
+        # Only include results for tests we configured
+        if p["test"] in valid_tests:
             results.append(
                 BenchmarkResult(
                     quant_type=quant_type,
                     model_size_gib=p["size_gib"],
                     model_params=p["params"],
-                    test_name=f"pp{pp}",
-                    tokens_per_sec=p["tokens_per_sec"],
-                    std_dev=p["std_dev"],
-                )
-            )
-
-    # Run token generation tests
-    for tg in TOKEN_GENERATION_TESTS:
-        output = run_benchmark(model_path, test_gen=tg, extra_args=extra_args)
-        parsed = parse_llama_bench_output(output)
-
-        for p in parsed:
-            results.append(
-                BenchmarkResult(
-                    quant_type=quant_type,
-                    model_size_gib=p["size_gib"],
-                    model_params=p["params"],
-                    test_name=f"tg{tg}",
+                    test_name=p["test"],
                     tokens_per_sec=p["tokens_per_sec"],
                     std_dev=p["std_dev"],
                 )
@@ -529,7 +569,12 @@ Examples:
     parser.add_argument(
         "--keep-quants",
         action="store_true",
-        help="Keep generated quants after benchmarking (default: delete them)",
+        help="Keep generated quants after benchmarking (only useful with --quant-dir, otherwise ignored)",
+    )
+    parser.add_argument(
+        "--keep-original-gguf",
+        action="store_true",
+        help="Keep the original GGUF file after converting from HuggingFace (only useful with --quant-dir, otherwise ignored)",
     )
     parser.add_argument(
         "--quants",
@@ -550,13 +595,22 @@ Examples:
     # Remaining arguments go to llama-bench
     args, remaining_args = parser.parse_known_args()
 
+    # Validate that keep-* flags are only used with --quant-dir
+    if not args.quant_dir:
+        if args.keep_quants:
+            print("Error: --keep-quants can only be used with --quant-dir")
+            sys.exit(ExitCode.INVALID_ARGUMENTS)
+        if args.keep_original_gguf:
+            print("Error: --keep-original-gguf can only be used with --quant-dir")
+            sys.exit(ExitCode.INVALID_ARGUMENTS)
+
     # Validate model path
     model_path = args.model
     if not is_huggingface_model(model_path) and not is_gguf_file(model_path):
         print(
             f"Error: Model path '{model_path}' is neither a HuggingFace model directory nor a GGUF file"
         )
-        sys.exit(1)
+        sys.exit(ExitCode.INVALID_MODEL_PATH)
 
     # Get model name
     model_name = args.model_name if args.model_name else infer_model_name(model_path)
@@ -568,11 +622,11 @@ Examples:
         available_quants = get_available_quants()
     except Exception as e:
         print(f"Error fetching quantization types: {e}")
-        sys.exit(1)
+        sys.exit(ExitCode.QUANT_FETCH_FAILED)
 
     if not available_quants:
         print("Error: Could not parse quantization types from llama-quantize")
-        sys.exit(1)
+        sys.exit(ExitCode.QUANT_FETCH_FAILED)
 
     # Parse user-specified quants or use defaults
     if args.quants:
@@ -580,7 +634,7 @@ Examples:
             quant_types = parse_user_quants(args.quants, available_quants)
         except ValueError as e:
             print(f"Error: {e}")
-            sys.exit(1)
+            sys.exit(ExitCode.QUANT_PARSE_ERROR)
     else:
         quant_types = get_default_quants(available_quants)
 
@@ -606,7 +660,7 @@ Examples:
             base_model_path = str(base_gguf_path)
         except Exception as e:
             print(f"Error converting model: {e}")
-            sys.exit(1)
+            sys.exit(ExitCode.MODEL_CONVERSION_FAILED)
     else:
         base_model_path = model_path
 
@@ -661,12 +715,13 @@ Examples:
         if temp_dir:
             temp_dir.cleanup()
         elif base_gguf_path is not None:
-            if not args.keep_quants and base_gguf_path.exists():
+            if not args.keep_original_gguf and base_gguf_path.exists():
                 base_gguf_path.unlink()
+                print(f"Deleted base GGUF: {base_gguf_path}")
 
     if not all_results:
         print("\nError: No benchmark results collected")
-        sys.exit(1)
+        sys.exit(ExitCode.NO_RESULTS)
 
     # Generate report
     report = BenchmarkReport(
