@@ -31,12 +31,8 @@ LLAMA_QUANTIZE_AVAILABLE = _is_binary_available("llama-quantize")
 LLAMA_BENCH_AVAILABLE = _is_binary_available("llama-bench")
 
 # Skip reasons
-BINARIES_SKIP_REASON = (
-    "Required binaries (llama-quantize, llama-bench) not found in PATH"
-)
-MODEL_PATH_SKIP_REASON = (
-    f"Test model path not set in {TEST_MODEL_ENV_VAR} environment variable"
-)
+BINARIES_SKIP_REASON = "Required binaries (llama-quantize, llama-bench) not found in PATH"
+MODEL_PATH_SKIP_REASON = f"Test model path not set in {TEST_MODEL_ENV_VAR} environment variable"
 
 # =============================================================================
 # FIXTURES
@@ -74,9 +70,7 @@ def test_model_path() -> Path:
     missing_files = [f for f in required_files if not (model_path / f).exists()]
 
     if missing_files:
-        pytest.skip(
-            f"{MODEL_PATH_SKIP_REASON}: Missing required files: {missing_files}"
-        )
+        pytest.skip(f"{MODEL_PATH_SKIP_REASON}: Missing required files: {missing_files}")
 
     return model_path
 
@@ -188,11 +182,7 @@ def _test_model_path_exists() -> bool:
     if not model_path_str:
         return False
     model_path = Path(model_path_str)
-    return (
-        model_path.exists()
-        and model_path.is_dir()
-        and (model_path / "config.json").exists()
-    )
+    return model_path.exists() and model_path.is_dir() and (model_path / "config.json").exists()
 
 
 requires_test_model = pytest.mark.skipif(

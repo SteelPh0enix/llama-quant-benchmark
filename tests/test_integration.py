@@ -4,44 +4,24 @@ These tests verify the core functionality of the llama-quant-benchmark script,
 including model detection, conversion, quantization, and benchmarking.
 """
 
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
-# Import the functions from the main script
-# We need to add the parent directory to path for imports
-try:
-    from llama_quant_bench import (
-        QuantizationType,
-        convert_hf_to_gguf,
-        download_converter,
-        infer_model_name,
-        is_gguf_file,
-        is_huggingface_model,
-        parse_llama_bench_output,
-        quantize_model,
-        run_benchmark,
-        run_benchmark_all_tests,
-        run_full_benchmark,
-    )
-except ImportError:
-    # Add parent directory to path
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from llama_quant_bench import (
-        QuantizationType,
-        convert_hf_to_gguf,
-        download_converter,
-        infer_model_name,
-        is_gguf_file,
-        is_huggingface_model,
-        parse_llama_bench_output,
-        quantize_model,
-        run_benchmark,
-        run_benchmark_all_tests,
-        run_full_benchmark,
-    )
+from llama_quant_bench import (
+    QuantizationType,
+    convert_hf_to_gguf,
+    download_converter,
+    infer_model_name,
+    is_gguf_file,
+    is_huggingface_model,
+    parse_llama_bench_output,
+    quantize_model,
+    run_benchmark,
+    run_benchmark_all_tests,
+    run_full_benchmark,
+)
 
 if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest
@@ -198,9 +178,7 @@ class TestConverterDownload:
         assert converter_path.exists(), "Converter file should exist after download"
         content = converter_path.read_text()
         assert len(content) > 0, "Converter file should not be empty"
-        assert (
-            "convert" in content.lower()
-        ), "Converter should contain conversion-related content"
+        assert "convert" in content.lower(), "Converter should contain conversion-related content"
 
     def test_download_converter_idempotent(self, temp_output_dir: Path) -> None:
         """Test that downloading twice overwrites the file.
@@ -249,9 +227,7 @@ class TestModelConversion:
         convert_hf_to_gguf(str(test_model_path), str(output_gguf))
 
         # Verify the output file was created
-        assert (
-            output_gguf.exists()
-        ), f"Converted GGUF file should exist at {output_gguf}"
+        assert output_gguf.exists(), f"Converted GGUF file should exist at {output_gguf}"
         assert output_gguf.stat().st_size > 0, "Converted GGUF file should not be empty"
 
     def test_convert_hf_to_gguf_invalid_input(self, temp_output_dir: Path) -> None:
@@ -313,9 +289,9 @@ class TestQuantization:
         assert quant_gguf.exists(), "Quantized file should exist"
         assert quant_gguf.stat().st_size > 0, "Quantized file should not be empty"
         # Quantized file should be smaller than base
-        assert (
-            quant_gguf.stat().st_size < base_gguf.stat().st_size
-        ), "Quantized file should be smaller than base"
+        assert quant_gguf.stat().st_size < base_gguf.stat().st_size, (
+            "Quantized file should be smaller than base"
+        )
 
     @pytest.mark.slow
     def test_quantize_model_multiple_types(
@@ -344,12 +320,10 @@ class TestQuantization:
             quant_gguf = temp_output_dir / f"quantized_{quant_type.name}.gguf"
             quantize_model(str(base_gguf), str(quant_gguf), quant_type)
 
-            assert (
-                quant_gguf.exists()
-            ), f"Quantized file for {quant_type.name} should exist"
-            assert (
-                quant_gguf.stat().st_size > 0
-            ), f"Quantized file for {quant_type.name} should not be empty"
+            assert quant_gguf.exists(), f"Quantized file for {quant_type.name} should exist"
+            assert quant_gguf.stat().st_size > 0, (
+                f"Quantized file for {quant_type.name} should not be empty"
+            )
 
 
 # =============================================================================
@@ -392,9 +366,9 @@ class TestBenchmark:
         output = run_benchmark(str(base_gguf), test_prompt=512)
 
         # Verify output contains expected content
-        assert (
-            "pp512" in output or "bench" in output.lower()
-        ), "Benchmark output should contain test information"
+        assert "pp512" in output or "bench" in output.lower(), (
+            "Benchmark output should contain test information"
+        )
 
     @pytest.mark.slow
     def test_run_benchmark_all_tests(
@@ -416,9 +390,9 @@ class TestBenchmark:
         output = run_benchmark_all_tests(str(base_gguf))
 
         # Verify output contains test information
-        assert (
-            "pp" in output or "tg" in output or "bench" in output.lower()
-        ), "Benchmark output should contain test information"
+        assert "pp" in output or "tg" in output or "bench" in output.lower(), (
+            "Benchmark output should contain test information"
+        )
 
 
 # =============================================================================
@@ -516,9 +490,9 @@ class TestFullWorkflow:
             temp_output_dir: Fixture providing a temporary output directory.
         """
         # Step 1: Verify HF model detection
-        assert is_huggingface_model(
-            str(test_model_path)
-        ), "Test model should be detected as HF model"
+        assert is_huggingface_model(str(test_model_path)), (
+            "Test model should be detected as HF model"
+        )
 
         # Step 2: Convert to GGUF
         model_name = infer_model_name(str(test_model_path))
