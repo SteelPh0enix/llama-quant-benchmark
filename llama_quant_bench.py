@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LLaMA Quantization Benchmark Tool
+"""LLaMA Quantization Benchmark Tool.
 
 Benchmarks different quantization types using llama-quantize and llama-bench.
 """
@@ -7,12 +7,15 @@ Benchmarks different quantization types using llama-quantize and llama-bench.
 import argparse
 import datetime
 import re
+import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
 import urllib.request
 from dataclasses import dataclass
 from enum import IntEnum
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +86,18 @@ class QuantizationType:
     name: str
 
 
+# Error messages for TRY003 compliance
+ERR_NO_QUANTS = "No quantization types specified"
+ERR_MIXED_NAMES_IDS = (
+    "Cannot mix quantization names and IDs. "
+    "Use either names (e.g., Q4_K) or IDs (e.g., 15) but not both."
+)
+ERR_UNKNOWN_QUANT = "Unknown quantization type: {}"
+ERR_QUANT_FAILED = "Quantization failed: {}"
+ERR_BENCH_FAILED = "Benchmark failed: {}"
+ERR_QUANTIZE_NOT_FOUND = "llama-quantize not found in PATH"
+
+
 # =============================================================================
 # QUANTIZATION TYPE MANAGEMENT
 # =============================================================================
@@ -90,9 +105,18 @@ class QuantizationType:
 
 def get_available_quants() -> dict[str, QuantizationType]:
     """Get available quantization types by running llama-quantize --help.
+
     Returns a mapping of names/IDs to QuantizationType objects.
     """
-    result = subprocess.run(["llama-quantize", "--help"], capture_output=True, text=True)
+    quantize_bin = shutil.which("llama-quantize")
+    if quantize_bin is None:
+        raise RuntimeError(ERR_QUANTIZE_NOT_FOUND)
+    result = subprocess.run(
+        [quantize_bin, "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     output = result.stdout + result.stderr
 
@@ -119,12 +143,13 @@ def parse_user_quants(
     available_quants: dict[str, QuantizationType],
 ) -> list[QuantizationType]:
     """Parse user-provided quantization list.
+
     Validates that all items are either names or IDs (not mixed).
     """
     items = [item.strip() for item in user_input.split(",")]
 
     if not items:
-        raise ValueError("No quantization types specified")
+        raise ValueError(ERR_NO_QUANTS)
 
     # Check if mixing names and IDs
     has_name = False
@@ -137,16 +162,14 @@ def parse_user_quants(
             has_name = True
 
     if has_name and has_id:
-        raise ValueError(
-            "Cannot mix quantization names and IDs. Use either names (e.g., Q4_K) or IDs (e.g., 15) but not both.",
-        )
+        raise ValueError(ERR_MIXED_NAMES_IDS)
 
     # Validate and return
     result = []
     for item in items:
         lookup_key = item if item.isdigit() else item.lower()
         if lookup_key not in available_quants:
-            raise ValueError(f"Unknown quantization type: {item}")
+            raise ValueError(ERR_UNKNOWN_QUANT.format(item))
         qt = available_quants[lookup_key]
         # Avoid duplicates
         if qt not in result:
@@ -163,10 +186,9 @@ def get_default_quants(
     result = []
 
     for key, qt in available_quants.items():
-        if key.isdigit():  # Only process numeric keys to avoid duplicates
-            if qt.id not in seen_ids:
-                seen_ids.add(qt.id)
-                result.append(qt)
+        if key.isdigit() and qt.id not in seen_ids:
+            seen_ids.add(qt.id)
+            result.append(qt)
 
     # Sort by ID
     result.sort(key=lambda x: x.id)
@@ -203,14 +225,15 @@ def is_gguf_file(path: str) -> bool:
 def download_converter(output_path: Path) -> None:
     """Download the convert_hf_to_gguf.py script."""
     print(f"Downloading converter to {output_path}...")
-    import ssl
 
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
-    with urllib.request.urlopen(CONVERTER_URL, context=ssl_context) as response:
-        with open(output_path, "wb") as f:
-            f.write(response.read())
+    with (
+        urllib.request.urlopen(CONVERTER_URL, context=ssl_context) as response,  # noqa: S310
+        output_path.open("wb") as f,
+    ):
+        f.write(response.read())
     print("Converter downloaded successfully")
 
 
@@ -226,12 +249,14 @@ def convert_hf_to_gguf(hf_dir: str, output_path: str) -> None:
         [sys.executable, str(converter_path), hf_dir, "--outfile", output_path],
         capture_output=True,
         text=True,
+        check=False,
     )
 
     if result.returncode != 0:
         print(f"Conversion stdout: {result.stdout}")
         print(f"Conversion stderr: {result.stderr}")
-        raise RuntimeError(f"Failed to convert model: {result.stderr}")
+        msg = f"Failed to convert model: {result.stderr}"
+        raise RuntimeError(msg)
 
     print("Conversion successful")
 
@@ -257,6 +282,7 @@ def infer_model_name(model_path: str) -> str:
 
 def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
     """Parse llama-bench markdown output.
+
     Returns a list of dictionaries with parsed data.
     """
     results = []
@@ -264,22 +290,13 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
     # Split into lines and look for table rows
     lines = output.split("\n")
 
-    for line in lines:
-        line = line.strip()
+    for raw_line in lines:
+        stripped = raw_line.strip()
         # Look for lines that start with "|" and have data (not headers or separators)
-        if line.startswith("|") and "±" in line:
-            parts = [p.strip() for p in line.split("|") if p.strip()]
+        if stripped.startswith("|") and "±" in stripped:
+            parts = [p.strip() for p in stripped.split("|") if p.strip()]
 
             if len(parts) >= 6:
-                # Expected: model, size, params, backend, ngl, test, t/s
-                # parts[0] = model
-                # parts[1] = size (e.g., "4.70 GiB")
-                # parts[2] = params (e.g., "4.02 B")
-                # parts[3] = backend
-                # parts[4] = ngl
-                # parts[5] = test (e.g., "pp512" or "tg128")
-                # parts[6] = t/s (e.g., "1885.74 ± 2.76")
-
                 try:
                     model = parts[0]
                     size_str = parts[1]
@@ -323,10 +340,14 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
 def quantize_model(input_path: str, output_path: str, quant_type: QuantizationType) -> None:
     """Quantize a model using llama-quantize."""
     print(f"Quantizing to {quant_type.name} (ID: {quant_type.id})...")
+    quantize_bin = shutil.which("llama-quantize")
+    if quantize_bin is None:
+        raise RuntimeError(ERR_QUANTIZE_NOT_FOUND)
     result = subprocess.run(
-        ["llama-quantize", input_path, output_path, str(quant_type.id)],
+        [quantize_bin, input_path, output_path, str(quant_type.id)],
         capture_output=True,
         text=True,
+        check=False,
     )
 
     print(result.stdout)
@@ -334,7 +355,8 @@ def quantize_model(input_path: str, output_path: str, quant_type: QuantizationTy
         print(result.stderr)
 
     if result.returncode != 0:
-        raise RuntimeError(f"Quantization failed: {result.stderr}")
+        msg = ERR_QUANT_FAILED.format(result.stderr)
+        raise RuntimeError(msg)
 
     print(f"Quantization successful: {output_path}")
 
@@ -361,14 +383,15 @@ def run_benchmark(
         cmd.extend(filtered_args)
 
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
     print(result.stdout)
     if result.stderr:
         print(result.stderr)
 
     if result.returncode != 0:
-        raise RuntimeError(f"Benchmark failed: {result.stderr}")
+        msg = ERR_BENCH_FAILED.format(result.stderr)
+        raise RuntimeError(msg)
 
     return result.stdout + result.stderr
 
@@ -391,14 +414,15 @@ def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None
         cmd.extend(filtered_args)
 
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
     print(result.stdout)
     if result.stderr:
         print(result.stderr)
 
     if result.returncode != 0:
-        raise RuntimeError(f"Benchmark failed: {result.stderr}")
+        msg = ERR_BENCH_FAILED.format(result.stderr)
+        raise RuntimeError(msg)
 
     return result.stdout + result.stderr
 
@@ -456,12 +480,10 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
         lines.append("| ------------ | ---------- | ---- | ------------- |")
 
         # Group results by quant type
-        from itertools import groupby
-
         sorted_results = sorted(report.results, key=lambda x: x.quant_type)
 
         first_group = True
-        for quant_type, group in groupby(sorted_results, key=lambda x: x.quant_type):
+        for _quant_type, group in groupby(sorted_results, key=lambda x: x.quant_type):
             if not first_group:
                 # Add separator between groups
                 lines.append("| ------------ | ---------- | ---- | ------------- |")
@@ -480,12 +502,10 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
         lines.append("| ---- | ------------ | ---------- | ------------- |")
 
         # Group results by test name
-        from itertools import groupby
-
         sorted_results = sorted(report.results, key=lambda x: x.test_name)
 
         first_group = True
-        for test_name, group in groupby(sorted_results, key=lambda x: x.test_name):
+        for _test_name, group in groupby(sorted_results, key=lambda x: x.test_name):
             if not first_group:
                 # Add separator between groups
                 lines.append("| ---- | ------------ | ---------- | ------------- |")
@@ -513,8 +533,7 @@ def save_report(report: BenchmarkReport, output_path: str, grouping: str) -> Non
     """Save the report to a file."""
     markdown = generate_markdown_report(report, grouping)
 
-    with open(output_path, "w") as f:
-        f.write(markdown)
+    Path(output_path).write_text(markdown)
 
     print(f"\nReport saved to: {output_path}")
 
@@ -524,7 +543,8 @@ def save_report(report: BenchmarkReport, output_path: str, grouping: str) -> Non
 # =============================================================================
 
 
-def main():
+def create_argument_parser() -> argparse.ArgumentParser:
+    """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
         description="Benchmark LLaMA model quantizations using llama-bench",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -537,17 +557,16 @@ Examples:
         """,
     )
 
-    # Required arguments
     parser.add_argument(
         "--model",
         required=True,
         help="Path to directory with raw model weights from HuggingFace, or GGUF file",
     )
-
-    # Optional arguments
     parser.add_argument(
         "--quant-dir",
-        help="Path to directory where generated quants will be placed (default: temporary directory)",
+        help=(
+            "Path to directory where generated quants will be placed (default: temporary directory)"
+        ),
     )
     parser.add_argument(
         "--model-name",
@@ -556,12 +575,18 @@ Examples:
     parser.add_argument(
         "--keep-quants",
         action="store_true",
-        help="Keep generated quants after benchmarking (only useful with --quant-dir, otherwise ignored)",
+        help=(
+            "Keep generated quants after benchmarking "
+            "(only useful with --quant-dir, otherwise ignored)"
+        ),
     )
     parser.add_argument(
         "--keep-original-gguf",
         action="store_true",
-        help="Keep the original GGUF file after converting from HuggingFace (only useful with --quant-dir, otherwise ignored)",
+        help=(
+            "Keep the original GGUF file after converting from HuggingFace "
+            "(only useful with --quant-dir, otherwise ignored)"
+        ),
     )
     parser.add_argument(
         "--quants",
@@ -579,10 +604,11 @@ Examples:
         help="Group results by quantization type or test type (default: quant)",
     )
 
-    # Remaining arguments go to llama-bench
-    args, remaining_args = parser.parse_known_args()
+    return parser
 
-    # Validate that keep-* flags are only used with --quant-dir
+
+def validate_keep_flags(args: argparse.Namespace) -> None:
+    """Validate that keep-* flags are only used with --quant-dir."""
     if not args.quant_dir:
         if args.keep_quants:
             print("Error: --keep-quants can only be used with --quant-dir")
@@ -591,23 +617,23 @@ Examples:
             print("Error: --keep-original-gguf can only be used with --quant-dir")
             sys.exit(ExitCode.INVALID_ARGUMENTS)
 
-    # Validate model path
-    model_path = args.model
+
+def validate_model_path(model_path: str) -> None:
+    """Validate that the model path exists and is valid."""
     if not is_huggingface_model(model_path) and not is_gguf_file(model_path):
         print(
-            f"Error: Model path '{model_path}' is neither a HuggingFace model directory nor a GGUF file",
+            f"Error: Model path '{model_path}' is neither a HuggingFace "
+            "model directory nor a GGUF file",
         )
         sys.exit(ExitCode.INVALID_MODEL_PATH)
 
-    # Get model name
-    model_name = args.model_name if args.model_name else infer_model_name(model_path)
-    print(f"Model name: {model_name}")
 
-    # Get available quantization types
+def get_quantization_types(args: argparse.Namespace) -> list[QuantizationType]:
+    """Fetch and parse quantization types."""
     print("Fetching available quantization types...")
     try:
         available_quants = get_available_quants()
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"Error fetching quantization types: {e}")
         sys.exit(ExitCode.QUANT_FETCH_FAILED)
 
@@ -615,109 +641,185 @@ Examples:
         print("Error: Could not parse quantization types from llama-quantize")
         sys.exit(ExitCode.QUANT_FETCH_FAILED)
 
-    # Parse user-specified quants or use defaults
     if args.quants:
         try:
-            quant_types = parse_user_quants(args.quants, available_quants)
+            return parse_user_quants(args.quants, available_quants)
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(ExitCode.QUANT_PARSE_ERROR)
-    else:
-        quant_types = get_default_quants(available_quants)
 
-    print(f"Will benchmark {len(quant_types)} quantization types")
+    return get_default_quants(available_quants)
 
-    # Setup quantization directory
+
+def setup_quant_dir(
+    args: argparse.Namespace,
+) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+    """Setup quantization directory."""
     if args.quant_dir:
         quant_dir = Path(args.quant_dir)
         quant_dir.mkdir(parents=True, exist_ok=True)
-        temp_dir = None
-    else:
-        temp_dir = tempfile.TemporaryDirectory()
-        quant_dir = Path(temp_dir.name)
+        return quant_dir, None
 
-    print(f"Quantization directory: {quant_dir}")
+    temp_dir = tempfile.TemporaryDirectory()
+    return Path(temp_dir.name), temp_dir
 
-    # Convert HF model to GGUF if needed
-    base_gguf_path = None
+
+def convert_model_if_needed(
+    model_path: str,
+    quant_dir: Path,
+    model_name: str,
+) -> tuple[str, Path | None]:
+    """Convert HF model to GGUF if needed."""
     if is_huggingface_model(model_path):
         base_gguf_path = quant_dir / f"{model_name}-base.gguf"
         try:
             convert_hf_to_gguf(model_path, str(base_gguf_path))
-            base_model_path = str(base_gguf_path)
-        except Exception as e:
+            return str(base_gguf_path), base_gguf_path
+        except (RuntimeError, OSError) as e:
             print(f"Error converting model: {e}")
             sys.exit(ExitCode.MODEL_CONVERSION_FAILED)
-    else:
-        base_model_path = model_path
 
-    # Run benchmarks
-    all_results = []
+    return model_path, None
+
+
+def process_single_quantization(
+    quant_type: QuantizationType,
+    base_model_path: str,
+    quant_dir: Path,
+    model_name: str,
+    remaining_args: list[str],
+    *,
+    keep_quants: bool,
+) -> tuple[list[BenchmarkResult], str, str]:
+    """Process a single quantization type."""
+    print(f"\n{'=' * 60}")
+    print(f"Benchmarking: {quant_type.name}")
+    print(f"{'=' * 60}")
+
+    results: list[BenchmarkResult] = []
     backend = "unknown"
     model_params = "unknown"
 
+    quant_path = quant_dir / f"{model_name}-{quant_type.name}.gguf"
     try:
-        for quant_type in quant_types:
-            print(f"\n{'=' * 60}")
-            print(f"Benchmarking: {quant_type.name}")
-            print(f"{'=' * 60}")
+        quantize_model(base_model_path, str(quant_path), quant_type)
+    except (RuntimeError, OSError) as e:
+        print(f"Error quantizing to {quant_type.name}: {e}")
+        return results, backend, model_params
 
-            # Quantize
-            quant_path = quant_dir / f"{model_name}-{quant_type.name}.gguf"
-            try:
-                quantize_model(base_model_path, str(quant_path), quant_type)
-            except Exception as e:
-                print(f"Error quantizing to {quant_type.name}: {e}")
-                continue
+    try:
+        bench_results = run_full_benchmark(str(quant_path), quant_type.name, remaining_args)
+        results.extend(bench_results)
 
-            # Benchmark
-            try:
-                results = run_full_benchmark(str(quant_path), quant_type.name, remaining_args)
-                all_results.extend(results)
+        if bench_results and backend == "unknown":
+            test_output = run_benchmark(
+                str(quant_path),
+                test_prompt=512,
+                extra_args=remaining_args,
+            )
+            parsed = parse_llama_bench_output(test_output)
+            if parsed:
+                backend = parsed[0]["backend"]
+                model_params = parsed[0]["params"]
 
-                # Extract backend and params from first result
-                if results and backend == "unknown":
-                    # Run a quick test to get backend info
-                    test_output = run_benchmark(
-                        str(quant_path),
-                        test_prompt=512,
-                        extra_args=remaining_args,
-                    )
-                    parsed = parse_llama_bench_output(test_output)
-                    if parsed:
-                        backend = parsed[0]["backend"]
-                        model_params = parsed[0]["params"]
+    except (RuntimeError, OSError) as e:
+        print(f"Error benchmarking {quant_type.name}: {e}")
 
-            except Exception as e:
-                print(f"Error benchmarking {quant_type.name}: {e}")
-                continue
+    if not keep_quants and quant_path.exists():
+        quant_path.unlink()
+        print(f"Deleted: {quant_path}")
 
-            # Delete quant if not keeping
-            if not args.keep_quants and quant_path.exists():
-                quant_path.unlink()
-                print(f"Deleted: {quant_path}")
+    return results, backend, model_params
 
+
+def run_all_benchmarks(
+    quant_types: list[QuantizationType],
+    base_model_path: str,
+    quant_dir: Path,
+    model_name: str,
+    remaining_args: list[str],
+    *,
+    keep_quants: bool,
+) -> tuple[list[BenchmarkResult], str, str]:
+    """Run benchmarks for all quantization types."""
+    all_results: list[BenchmarkResult] = []
+    backend = "unknown"
+    model_params = "unknown"
+
+    for quant_type in quant_types:
+        results, be, mp = process_single_quantization(
+            quant_type,
+            base_model_path,
+            quant_dir,
+            model_name,
+            remaining_args,
+            keep_quants=keep_quants,
+        )
+        all_results.extend(results)
+        if be != "unknown":
+            backend = be
+        if mp != "unknown":
+            model_params = mp
+
+    return all_results, backend, model_params
+
+
+def cleanup_resources(
+    temp_dir: tempfile.TemporaryDirectory[str] | None,
+    base_gguf_path: Path | None,
+    *,
+    keep_original_gguf: bool,
+) -> None:
+    """Cleanup temporary resources."""
+    if temp_dir:
+        temp_dir.cleanup()
+    elif base_gguf_path and not keep_original_gguf and base_gguf_path.exists():
+        base_gguf_path.unlink()
+        print(f"Deleted base GGUF: {base_gguf_path}")
+
+
+def main() -> None:
+    """Run the benchmarking tool."""
+    parser = create_argument_parser()
+    args, remaining_args = parser.parse_known_args()
+
+    validate_keep_flags(args)
+    validate_model_path(args.model)
+
+    model_name = args.model_name if args.model_name else infer_model_name(args.model)
+    print(f"Model name: {model_name}")
+
+    quant_types = get_quantization_types(args)
+    print(f"Will benchmark {len(quant_types)} quantization types")
+
+    quant_dir, temp_dir = setup_quant_dir(args)
+    print(f"Quantization directory: {quant_dir}")
+
+    base_model_path, base_gguf_path = convert_model_if_needed(args.model, quant_dir, model_name)
+
+    try:
+        all_results, backend, model_params = run_all_benchmarks(
+            quant_types,
+            base_model_path,
+            quant_dir,
+            model_name,
+            remaining_args,
+            keep_quants=args.keep_quants,
+        )
     finally:
-        # Cleanup
-        if temp_dir:
-            temp_dir.cleanup()
-        elif base_gguf_path is not None:
-            if not args.keep_original_gguf and base_gguf_path.exists():
-                base_gguf_path.unlink()
-                print(f"Deleted base GGUF: {base_gguf_path}")
+        cleanup_resources(temp_dir, base_gguf_path, keep_original_gguf=args.keep_original_gguf)
 
     if not all_results:
         print("\nError: No benchmark results collected")
         sys.exit(ExitCode.NO_RESULTS)
 
-    # Generate report
     report = BenchmarkReport(
         model_name=model_name,
         model_params=model_params,
         backend=backend,
         llama_bench_args=remaining_args,
         results=all_results,
-        generated_at=datetime.datetime.now(),
+        generated_at=datetime.datetime.now(tz=datetime.UTC),
     )
 
     save_report(report, args.output, args.group)

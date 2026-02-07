@@ -2,7 +2,6 @@
 
 import os
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
@@ -22,15 +21,7 @@ TEST_MODEL_ENV_VAR = "LLAMA_QUANT_BENCH_TEST_MODEL"
 
 def _is_binary_available(binary_name: str) -> bool:
     """Check if a binary is available in PATH."""
-    try:
-        result = subprocess.run(
-            ["which", binary_name],
-            capture_output=True,
-            check=False,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    return shutil.which(binary_name) is not None
 
 
 # Check for required binaries
@@ -62,6 +53,7 @@ def test_model_path() -> Path:
     model_path_str = os.environ.get(TEST_MODEL_ENV_VAR)
     if not model_path_str:
         pytest.skip(f"{MODEL_PATH_SKIP_REASON}: Environment variable not set")
+    assert model_path_str is not None
     model_path = Path(model_path_str).resolve()
 
     # Validate the path exists
