@@ -400,9 +400,6 @@ def run_benchmark(
     """Run llama-bench and return the output."""
     cmd = ["llama-bench", "-m", model_path]
 
-    # TODO(SteelPh0enix): The script should have a command-line arguments for choosing the tested
-    # perplexity/token generation values. Currently we're operating on some defaults and user can't
-    # easily modify them without editing the script (verify that before making changes).
     if test_prompt:
         cmd.extend(["-p", str(test_prompt)])
     elif test_gen:
