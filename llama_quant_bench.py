@@ -43,6 +43,17 @@ DEFAULT_PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
 DEFAULT_TOKEN_GENERATION_TESTS = [128, 256, 512]  # tg128, tg256, tg512
 DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
+
+def parse_test_values(value: str) -> list[int]:
+    """Parse comma-separated test values from CLI argument.
+
+    Returns parsed list or default if empty.
+    """
+    if not value.strip():
+        raise ValueError
+    return [int(x.strip()) for x in value.split(",")]
+
+
 CONVERTER_URL = (
     "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/convert_hf_to_gguf.py"
 )
@@ -95,6 +106,7 @@ ERR_UNKNOWN_QUANT = "Unknown quantization type: {}"
 ERR_QUANT_FAILED = "Quantization failed: {}"
 ERR_BENCH_FAILED = "Benchmark failed: {}"
 ERR_QUANTIZE_NOT_FOUND = "llama-quantize not found in PATH"
+ERR_INVALID_TEST_VALUES = "Invalid test values: {}"
 
 
 # =============================================================================
@@ -413,13 +425,16 @@ def run_benchmark(
     return result.stdout + result.stderr
 
 
-def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None) -> str:
+def run_benchmark_all_tests(
+    model_path: str,
+    perplexity_tests: list[int],
+    token_generation_tests: list[int],
+    extra_args: list[str] | None = None,
+) -> str:
     """Run llama-bench with all configured tests in a single session."""
     # Build comma-separated test values
-    # TODO(SteelPh0enix): see the TODO above, tests should be selectable via CLI arguments.
-    # Also; remove code duplication.
-    pp_values = ",".join(str(pp) for pp in DEFAULT_PERPLEXITY_TESTS)
-    tg_values = ",".join(str(tg) for tg in DEFAULT_TOKEN_GENERATION_TESTS)
+    pp_values = ",".join(str(pp) for pp in perplexity_tests)
+    tg_values = ",".join(str(tg) for tg in token_generation_tests)
 
     cmd = ["llama-bench", "-m", model_path, "-p", pp_values, "-n", tg_values]
 
@@ -443,6 +458,8 @@ def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None
 def run_full_benchmark(
     model_path: str,
     quant_type: str,
+    perplexity_tests: list[int],
+    token_generation_tests: list[int],
     extra_args: list[str] | None = None,
 ) -> tuple[list[BenchmarkResult], str, str]:
     """Run all configured benchmarks for a model and return results.
@@ -452,14 +469,16 @@ def run_full_benchmark(
     results: list[BenchmarkResult] = []
 
     # Run single benchmark session with all tests
-    output = run_benchmark_all_tests(model_path, extra_args)
+    output = run_benchmark_all_tests(
+        model_path, perplexity_tests, token_generation_tests, extra_args
+    )
     parsed = parse_llama_bench_output(output)
 
     # Create set of valid test names for filtering
     # TODO(SteelPh0enix): Instead, the script should always specify the tests while calling
     # llama-bench.
-    valid_tests = {f"pp{pp}" for pp in DEFAULT_PERPLEXITY_TESTS} | {
-        f"tg{tg}" for tg in DEFAULT_TOKEN_GENERATION_TESTS
+    valid_tests = {f"pp{pp}" for pp in perplexity_tests} | {
+        f"tg{tg}" for tg in token_generation_tests
     }
 
     backend = "unknown"
@@ -630,6 +649,16 @@ Examples:
         default=DEFAULT_GROUPING,
         help="Group results by quantization type or test type (default: quant)",
     )
+    parser.add_argument(
+        "--perplexity-tests",
+        default=",".join(str(x) for x in DEFAULT_PERPLEXITY_TESTS),
+        help="Comma-separated list of perplexity test values (default: 512,1024,2048)",
+    )
+    parser.add_argument(
+        "--token-generation-tests",
+        default=",".join(str(x) for x in DEFAULT_TOKEN_GENERATION_TESTS),
+        help="Comma-separated list of token generation test values (default: 128,256,512)",
+    )
 
     return parser
 
@@ -715,6 +744,8 @@ def process_single_quantization(
     base_model_path: str,
     quant_dir: Path,
     model_name: str,
+    perplexity_tests: list[int],
+    token_generation_tests: list[int],
     remaining_args: list[str],
     *,
     keep_quants: bool,
@@ -737,7 +768,11 @@ def process_single_quantization(
 
     try:
         bench_results, bench_backend, bench_params = run_full_benchmark(
-            str(quant_path), quant_type.name, remaining_args
+            str(quant_path),
+            quant_type.name,
+            perplexity_tests,
+            token_generation_tests,
+            remaining_args,
         )
         results.extend(bench_results)
         # Update backend and model_params if not already set
@@ -761,6 +796,8 @@ def run_all_benchmarks(
     base_model_path: str,
     quant_dir: Path,
     model_name: str,
+    perplexity_tests: list[int],
+    token_generation_tests: list[int],
     remaining_args: list[str],
     *,
     keep_quants: bool,
@@ -776,6 +813,8 @@ def run_all_benchmarks(
             base_model_path,
             quant_dir,
             model_name,
+            perplexity_tests,
+            token_generation_tests,
             remaining_args,
             keep_quants=keep_quants,
         )
@@ -813,6 +852,23 @@ def main() -> None:
     model_name = args.model_name if args.model_name else infer_model_name(args.model)
     print(f"Model name: {model_name}")
 
+    # Parse test values from CLI arguments
+    try:
+        perplexity_tests = parse_test_values(args.perplexity_tests)
+    except ValueError as e:
+        msg = ERR_INVALID_TEST_VALUES.format(e)
+        print(msg)
+        sys.exit(ExitCode.INVALID_ARGUMENTS)
+    try:
+        token_generation_tests = parse_test_values(args.token_generation_tests)
+    except ValueError as e:
+        msg = ERR_INVALID_TEST_VALUES.format(e)
+        print(msg)
+        sys.exit(ExitCode.INVALID_ARGUMENTS)
+
+    print(f"Perplexity tests: {perplexity_tests}")
+    print(f"Token generation tests: {token_generation_tests}")
+
     quant_types = get_quantization_types(args)
     print(f"Will benchmark {len(quant_types)} quantization types")
 
@@ -827,6 +883,8 @@ def main() -> None:
             base_model_path,
             quant_dir,
             model_name,
+            perplexity_tests,
+            token_generation_tests,
             remaining_args,
             keep_quants=args.keep_quants,
         )
