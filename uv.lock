@@ -189,7 +189,7 @@ wheels = [
 [[package]]
 name = "gguf"
 version = "0.17.1"
-source = { git = "https://github.com/ggerganov/llama.cpp.git?subdirectory=gguf-py#8872ad2125336d209a9911a82101f80095a9831d" }
+source = { git = "https://github.com/ggerganov/llama.cpp.git?subdirectory=gguf-py#5fa1c190d9fc86c02698b730a2cb933195e19d96" }
 dependencies = [
     { name = "numpy" },
     { name = "pyyaml" },

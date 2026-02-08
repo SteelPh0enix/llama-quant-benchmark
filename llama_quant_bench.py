@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 # =============================================================================
-# EXIT CODES - Explicit values for clarity
+# EXIT CODES
 # =============================================================================
 
 
@@ -37,7 +37,7 @@ class ExitCode(IntEnum):
 
 
 # =============================================================================
-# GLOBAL CONFIGURATION - Easy to modify
+# GLOBAL CONFIGURATION
 # =============================================================================
 
 PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
@@ -131,8 +131,7 @@ def get_available_quants() -> dict[str, QuantizationType]:
         qid = int(match.group(1))
         name = match.group(2)
         qt = QuantizationType(id=qid, name=name)
-        quants[name] = qt
-        quants[name.lower()] = qt
+        quants[name.upper()] = qt
         quants[str(qid)] = qt
 
     return quants
@@ -167,7 +166,7 @@ def parse_user_quants(
     # Validate and return
     result: list[QuantizationType] = []
     for item in items:
-        lookup_key = item if item.isdigit() else item.lower()
+        lookup_key = item if item.isdigit() else item.upper()
         if lookup_key not in available_quants:
             raise ValueError(ERR_UNKNOWN_QUANT.format(item))
         qt = available_quants[lookup_key]
@@ -226,6 +225,7 @@ def download_converter(output_path: Path) -> None:
     """Download the convert_hf_to_gguf.py script."""
     print(f"Downloading converter to {output_path}...")
 
+    # TODO(SteelPh0enix): Fix this to validate SSL instead of ignoring it.
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
@@ -246,7 +246,15 @@ def convert_hf_to_gguf(hf_dir: str, output_path: str) -> None:
 
     print(f"Converting HuggingFace model from {hf_dir} to {output_path}...")
     result = subprocess.run(
-        [sys.executable, str(converter_path), hf_dir, "--outfile", output_path],
+        [
+            sys.executable,
+            str(converter_path),
+            hf_dir,
+            "--outfile",
+            output_path,
+            "--outtype",
+            "auto",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -370,6 +378,9 @@ def run_benchmark(
     """Run llama-bench and return the output."""
     cmd = ["llama-bench", "-m", model_path]
 
+    # TODO(SteelPh0enix): The script should have a command-line arguments for choosing the tested
+    # perplexity/token generation values. Currently we're operating on some defaults and user can't
+    # easily modify them without editing the script (verify that before making changes).
     if test_prompt:
         cmd.extend(["-p", str(test_prompt)])
     elif test_gen:
@@ -378,7 +389,9 @@ def run_benchmark(
     if extra_args:
         # Filter out llama-bench specific args that we don't want to pass
         filtered_args = [
-            a for a in extra_args if a not in ("--model", "-m", "-h", "--help", "--list-devices")
+            a
+            for a in extra_args
+            if a not in ("--model", "-m", "-h", "-p", "-n", "-pg", "--help", "--list-devices")
         ]
         cmd.extend(filtered_args)
 
@@ -399,6 +412,8 @@ def run_benchmark(
 def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None) -> str:
     """Run llama-bench with all configured tests in a single session."""
     # Build comma-separated test values
+    # TODO(SteelPh0enix): see the TODO above, tests should be selectable via CLI arguments.
+    # Also; remove code duplication.
     pp_values = ",".join(str(pp) for pp in PERPLEXITY_TESTS)
     tg_values = ",".join(str(tg) for tg in TOKEN_GENERATION_TESTS)
 
@@ -409,7 +424,7 @@ def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None
         filtered_args = [
             a
             for a in extra_args
-            if a not in ("--model", "-m", "-h", "--help", "--list-devices", "-p", "-n")
+            if a not in ("--model", "-m", "-h", "--help", "--list-devices", "-p", "-n", "-pg")
         ]
         cmd.extend(filtered_args)
 
@@ -440,6 +455,8 @@ def run_full_benchmark(
     parsed = parse_llama_bench_output(output)
 
     # Create set of valid test names for filtering
+    # TODO(SteelPh0enix): Instead, the script should always specify the tests while calling
+    # llama-bench.
     valid_tests = {f"pp{pp}" for pp in PERPLEXITY_TESTS} | {
         f"tg{tg}" for tg in TOKEN_GENERATION_TESTS
     }
@@ -712,6 +729,8 @@ def process_single_quantization(
         bench_results = run_full_benchmark(str(quant_path), quant_type.name, remaining_args)
         results.extend(bench_results)
 
+        # TODO(SteelPh0enix): Do not run test just to check the backend type, extract it from
+        # existing output...
         if bench_results and backend == "unknown":
             test_output = run_benchmark(
                 str(quant_path),
