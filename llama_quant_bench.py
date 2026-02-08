@@ -8,7 +8,6 @@ import argparse
 import datetime
 import re
 import shutil
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -40,8 +39,8 @@ class ExitCode(IntEnum):
 # GLOBAL CONFIGURATION
 # =============================================================================
 
-PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
-TOKEN_GENERATION_TESTS = [128, 256, 512]  # tg128, tg256, tg512
+DEFAULT_PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
+DEFAULT_TOKEN_GENERATION_TESTS = [128, 256, 512]  # tg128, tg256, tg512
 DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
 CONVERTER_URL = (
@@ -225,12 +224,8 @@ def download_converter(output_path: Path) -> None:
     """Download the convert_hf_to_gguf.py script."""
     print(f"Downloading converter to {output_path}...")
 
-    # TODO(SteelPh0enix): Fix this to validate SSL instead of ignoring it.
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
     with (
-        urllib.request.urlopen(CONVERTER_URL, context=ssl_context) as response,  # noqa: S310
+        urllib.request.urlopen(CONVERTER_URL) as response,  # noqa: S310
         output_path.open("wb") as f,
     ):
         f.write(response.read())
@@ -414,8 +409,8 @@ def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None
     # Build comma-separated test values
     # TODO(SteelPh0enix): see the TODO above, tests should be selectable via CLI arguments.
     # Also; remove code duplication.
-    pp_values = ",".join(str(pp) for pp in PERPLEXITY_TESTS)
-    tg_values = ",".join(str(tg) for tg in TOKEN_GENERATION_TESTS)
+    pp_values = ",".join(str(pp) for pp in DEFAULT_PERPLEXITY_TESTS)
+    tg_values = ",".join(str(tg) for tg in DEFAULT_TOKEN_GENERATION_TESTS)
 
     cmd = ["llama-bench", "-m", model_path, "-p", pp_values, "-n", tg_values]
 
@@ -457,8 +452,8 @@ def run_full_benchmark(
     # Create set of valid test names for filtering
     # TODO(SteelPh0enix): Instead, the script should always specify the tests while calling
     # llama-bench.
-    valid_tests = {f"pp{pp}" for pp in PERPLEXITY_TESTS} | {
-        f"tg{tg}" for tg in TOKEN_GENERATION_TESTS
+    valid_tests = {f"pp{pp}" for pp in DEFAULT_PERPLEXITY_TESTS} | {
+        f"tg{tg}" for tg in DEFAULT_TOKEN_GENERATION_TESTS
     }
 
     for p in parsed:
