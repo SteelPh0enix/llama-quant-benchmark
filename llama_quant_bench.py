@@ -210,10 +210,9 @@ def get_default_quants(
 # =============================================================================
 
 
-def is_huggingface_model(path: str) -> bool:
+def is_huggingface_model(path: Path) -> bool:
     """Check if path points to a HuggingFace model directory."""
-    p = Path(path)
-    if not p.is_dir():
+    if not path.is_dir():
         return False
 
     # Check for typical HF files
@@ -223,13 +222,12 @@ def is_huggingface_model(path: str) -> bool:
         "pytorch_model.bin",
         "tokenizer.json",
     ]
-    return any((p / f).exists() for f in hf_files)
+    return any((path / f).exists() for f in hf_files)
 
 
-def is_gguf_file(path: str) -> bool:
+def is_gguf_file(path: Path) -> bool:
     """Check if path points to a GGUF file."""
-    p = Path(path)
-    return p.is_file() and p.suffix == ".gguf"
+    return path.is_file() and path.suffix == ".gguf"
 
 
 def download_converter(output_path: Path) -> None:
@@ -244,7 +242,7 @@ def download_converter(output_path: Path) -> None:
     print("Converter downloaded successfully")
 
 
-def convert_hf_to_gguf(hf_dir: str, output_path: str) -> None:
+def convert_hf_to_gguf(hf_dir: Path, output_path: Path) -> None:
     """Convert HuggingFace model to GGUF format."""
     converter_path = Path(tempfile.gettempdir()) / "convert_hf_to_gguf.py"
 
@@ -256,9 +254,9 @@ def convert_hf_to_gguf(hf_dir: str, output_path: str) -> None:
         [
             sys.executable,
             str(converter_path),
-            hf_dir,
+            str(hf_dir),
             "--outfile",
-            output_path,
+            str(output_path),
             "--outtype",
             "auto",
         ],
@@ -276,18 +274,16 @@ def convert_hf_to_gguf(hf_dir: str, output_path: str) -> None:
     print("Conversion successful")
 
 
-def infer_model_name(model_path: str) -> str:
+def infer_model_name(model_path: Path) -> str:
     """Infer model name from path."""
-    p = Path(model_path)
-
-    if p.is_dir():
+    if model_path.is_dir():
         # HuggingFace directory - use directory name
-        return p.name
-    if p.is_file() and p.suffix == ".gguf":
+        return model_path.name
+    if model_path.is_file() and model_path.suffix == ".gguf":
         # GGUF file - use filename without extension
-        return p.stem
+        return model_path.stem
     # Fallback
-    return p.name
+    return model_path.name
 
 
 # =============================================================================
@@ -352,14 +348,14 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
 # =============================================================================
 
 
-def quantize_model(input_path: str, output_path: str, quant_type: QuantizationType) -> None:
+def quantize_model(input_path: Path, output_path: Path, quant_type: QuantizationType) -> None:
     """Quantize a model using llama-quantize."""
     print(f"Quantizing to {quant_type.name} (ID: {quant_type.id})...")
     quantize_bin = shutil.which("llama-quantize")
     if quantize_bin is None:
         raise RuntimeError(ERR_QUANTIZE_NOT_FOUND)
     result = subprocess.run(
-        [quantize_bin, input_path, output_path, str(quant_type.id)],
+        [quantize_bin, str(input_path), str(output_path), str(quant_type.id)],
         capture_output=True,
         text=True,
         check=False,
@@ -392,13 +388,13 @@ def _filter_llama_bench_args(args: list[str]) -> list[str]:
 
 
 def run_benchmark(
-    model_path: str,
+    model_path: Path,
     test_prompt: int | None = None,
     test_gen: int | None = None,
     extra_args: list[str] | None = None,
 ) -> str:
     """Run llama-bench and return the output."""
-    cmd = ["llama-bench", "-m", model_path]
+    cmd = ["llama-bench", "-m", str(model_path)]
 
     if test_prompt:
         cmd.extend(["-p", str(test_prompt)])
@@ -423,7 +419,7 @@ def run_benchmark(
 
 
 def run_benchmark_all_tests(
-    model_path: str,
+    model_path: Path,
     perplexity_tests: list[int],
     token_generation_tests: list[int],
     extra_args: list[str] | None = None,
@@ -433,7 +429,7 @@ def run_benchmark_all_tests(
     pp_values = ",".join(str(pp) for pp in perplexity_tests)
     tg_values = ",".join(str(tg) for tg in token_generation_tests)
 
-    cmd = ["llama-bench", "-m", model_path, "-p", pp_values, "-n", tg_values]
+    cmd = ["llama-bench", "-m", str(model_path), "-p", pp_values, "-n", tg_values]
 
     if extra_args:
         cmd.extend(_filter_llama_bench_args(extra_args))
@@ -453,7 +449,7 @@ def run_benchmark_all_tests(
 
 
 def run_full_benchmark(
-    model_path: str,
+    model_path: Path,
     quant_type: str,
     perplexity_tests: list[int],
     token_generation_tests: list[int],
@@ -572,11 +568,11 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     return "\n".join(lines)
 
 
-def save_report(report: BenchmarkReport, output_path: str, grouping: str) -> None:
+def save_report(report: BenchmarkReport, output_path: Path, grouping: str) -> None:
     """Save the report to a file."""
     markdown = generate_markdown_report(report, grouping)
 
-    Path(output_path).write_text(markdown)
+    output_path.write_text(markdown)
 
     print(f"\nReport saved to: {output_path}")
 
@@ -671,7 +667,7 @@ def validate_keep_flags(args: argparse.Namespace) -> None:
             sys.exit(ExitCode.INVALID_ARGUMENTS)
 
 
-def validate_model_path(model_path: str) -> None:
+def validate_model_path(model_path: Path) -> None:
     """Validate that the model path exists and is valid."""
     if not is_huggingface_model(model_path) and not is_gguf_file(model_path):
         msg = (
@@ -719,16 +715,16 @@ def setup_quant_dir(
 
 
 def convert_model_if_needed(
-    model_path: str,
+    model_path: Path,
     quant_dir: Path,
     model_name: str,
-) -> tuple[str, Path | None]:
+) -> tuple[Path, Path | None]:
     """Convert HF model to GGUF if needed."""
     if is_huggingface_model(model_path):
         base_gguf_path = quant_dir / f"{model_name}-base.gguf"
         try:
-            convert_hf_to_gguf(model_path, str(base_gguf_path))
-            return str(base_gguf_path), base_gguf_path
+            convert_hf_to_gguf(model_path, base_gguf_path)
+            return base_gguf_path, base_gguf_path
         except (RuntimeError, OSError) as e:
             print(f"Error converting model: {e}")
             sys.exit(ExitCode.MODEL_CONVERSION_FAILED)
@@ -736,9 +732,9 @@ def convert_model_if_needed(
     return model_path, None
 
 
-def process_single_quantization(
+def benchmark_single_quantization(
     quant_type: QuantizationType,
-    base_model_path: str,
+    base_model_path: Path,
     quant_dir: Path,
     model_name: str,
     perplexity_tests: list[int],
@@ -758,14 +754,14 @@ def process_single_quantization(
 
     quant_path = quant_dir / f"{model_name}-{quant_type.name}.gguf"
     try:
-        quantize_model(base_model_path, str(quant_path), quant_type)
+        quantize_model(base_model_path, quant_path, quant_type)
     except (RuntimeError, OSError) as e:
         print(f"Error quantizing to {quant_type.name}: {e}")
         return results, backend, model_params
 
     try:
         bench_results, bench_backend, bench_params = run_full_benchmark(
-            str(quant_path),
+            quant_path,
             quant_type.name,
             perplexity_tests,
             token_generation_tests,
@@ -790,7 +786,7 @@ def process_single_quantization(
 
 def run_all_benchmarks(
     quant_types: list[QuantizationType],
-    base_model_path: str,
+    base_model_path: Path,
     quant_dir: Path,
     model_name: str,
     perplexity_tests: list[int],
@@ -805,7 +801,7 @@ def run_all_benchmarks(
     model_params = "unknown"
 
     for quant_type in quant_types:
-        results, be, mp = process_single_quantization(
+        results, be, mp = benchmark_single_quantization(
             quant_type,
             base_model_path,
             quant_dir,
@@ -816,9 +812,9 @@ def run_all_benchmarks(
             keep_quants=keep_quants,
         )
         all_results.extend(results)
-        if be != "unknown":
+        if be != "unknown" and backend == "unknown":
             backend = be
-        if mp != "unknown":
+        if mp != "unknown" and backend == "unknown":
             model_params = mp
 
     return all_results, backend, model_params
@@ -844,9 +840,10 @@ def main() -> None:
     args, remaining_args = parser.parse_known_args()
 
     validate_keep_flags(args)
-    validate_model_path(args.model)
+    model_path = Path(args.model)
+    validate_model_path(model_path)
 
-    model_name = args.model_name if args.model_name else infer_model_name(args.model)
+    model_name = args.model_name if args.model_name else infer_model_name(model_path)
     print(f"Model name: {model_name}")
 
     # Parse test values from CLI arguments
@@ -872,7 +869,7 @@ def main() -> None:
     quant_dir, temp_dir = setup_quant_dir(args)
     print(f"Quantization directory: {quant_dir}")
 
-    base_model_path, base_gguf_path = convert_model_if_needed(args.model, quant_dir, model_name)
+    base_model_path, base_gguf_path = convert_model_if_needed(model_path, quant_dir, model_name)
 
     try:
         all_results, backend, model_params = run_all_benchmarks(
@@ -892,6 +889,7 @@ def main() -> None:
         print("\nError: No benchmark results collected")
         sys.exit(ExitCode.NO_RESULTS)
 
+    output_path = Path(args.output)
     report = BenchmarkReport(
         model_name=model_name,
         model_params=model_params,
@@ -901,7 +899,7 @@ def main() -> None:
         generated_at=datetime.datetime.now(tz=datetime.UTC),
     )
 
-    save_report(report, args.output, args.group)
+    save_report(report, output_path, args.group)
 
     print("\nBenchmark complete!")
 
