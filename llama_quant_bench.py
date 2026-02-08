@@ -870,7 +870,7 @@ def main() -> None:
     print(f"Token generation tests: {token_generation_tests}")
 
     quant_types = get_quantization_types(args)
-    print(f"Will benchmark {len(quant_types)} quantization types")
+    print(f"Will benchmark {len(quant_types)} quantization types: {[t.name for t in quant_types]}")
 
     quant_dir, temp_dir = setup_quant_dir(args)
     print(f"Quantization directory: {quant_dir}")
