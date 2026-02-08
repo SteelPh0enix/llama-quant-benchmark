@@ -136,6 +136,7 @@ ignore = [
     "COM812", # Trailing comma on multi-line (conflicts with formatter)
     "S101",   # Use of assert detected (normal in pytest)
     "S603",   # subprocess call: check for execution of untrusted input
+    "TD003",  # Missing issue link for TODO
 ]
 
 [tool.ruff.lint.pydocstyle]
