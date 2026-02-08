@@ -364,6 +364,21 @@ def quantize_model(input_path: str, output_path: str, quant_type: QuantizationTy
     print(f"Quantization successful: {output_path}")
 
 
+def _filter_llama_bench_args(args: list[str]) -> list[str]:
+    """Filter out llama-bench specific arguments that should not be passed through."""
+    excluded = {
+        "--model",
+        "-m",
+        "-h",
+        "--help",
+        "--list-devices",
+        "-p",
+        "-n",
+        "-pg",
+    }
+    return [a for a in args if a not in excluded]
+
+
 def run_benchmark(
     model_path: str,
     test_prompt: int | None = None,
@@ -382,13 +397,7 @@ def run_benchmark(
         cmd.extend(["-n", str(test_gen)])
 
     if extra_args:
-        # Filter out llama-bench specific args that we don't want to pass
-        filtered_args = [
-            a
-            for a in extra_args
-            if a not in ("--model", "-m", "-h", "-p", "-n", "-pg", "--help", "--list-devices")
-        ]
-        cmd.extend(filtered_args)
+        cmd.extend(_filter_llama_bench_args(extra_args))
 
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -415,13 +424,7 @@ def run_benchmark_all_tests(model_path: str, extra_args: list[str] | None = None
     cmd = ["llama-bench", "-m", model_path, "-p", pp_values, "-n", tg_values]
 
     if extra_args:
-        # Filter out llama-bench specific args that we don't want to pass
-        filtered_args = [
-            a
-            for a in extra_args
-            if a not in ("--model", "-m", "-h", "--help", "--list-devices", "-p", "-n", "-pg")
-        ]
-        cmd.extend(filtered_args)
+        cmd.extend(_filter_llama_bench_args(extra_args))
 
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -441,8 +444,11 @@ def run_full_benchmark(
     model_path: str,
     quant_type: str,
     extra_args: list[str] | None = None,
-) -> list[BenchmarkResult]:
-    """Run all configured benchmarks for a model and return results."""
+) -> tuple[list[BenchmarkResult], str, str]:
+    """Run all configured benchmarks for a model and return results.
+
+    Returns a tuple of (results, backend, model_params).
+    """
     results: list[BenchmarkResult] = []
 
     # Run single benchmark session with all tests
@@ -456,7 +462,16 @@ def run_full_benchmark(
         f"tg{tg}" for tg in DEFAULT_TOKEN_GENERATION_TESTS
     }
 
+    backend = "unknown"
+    model_params = "unknown"
+
     for p in parsed:
+        # Extract backend and model_params from first result
+        if backend == "unknown":
+            backend = p["backend"]
+        if model_params == "unknown":
+            model_params = p["params"]
+
         # Only include results for tests we configured
         if p["test"] in valid_tests:
             results.append(
@@ -470,7 +485,7 @@ def run_full_benchmark(
                 ),
             )
 
-    return results
+    return results, backend, model_params
 
 
 # =============================================================================
@@ -721,21 +736,15 @@ def process_single_quantization(
         return results, backend, model_params
 
     try:
-        bench_results = run_full_benchmark(str(quant_path), quant_type.name, remaining_args)
+        bench_results, bench_backend, bench_params = run_full_benchmark(
+            str(quant_path), quant_type.name, remaining_args
+        )
         results.extend(bench_results)
-
-        # TODO(SteelPh0enix): Do not run test just to check the backend type, extract it from
-        # existing output...
-        if bench_results and backend == "unknown":
-            test_output = run_benchmark(
-                str(quant_path),
-                test_prompt=512,
-                extra_args=remaining_args,
-            )
-            parsed = parse_llama_bench_output(test_output)
-            if parsed:
-                backend = parsed[0]["backend"]
-                model_params = parsed[0]["params"]
+        # Update backend and model_params if not already set
+        if backend == "unknown":
+            backend = bench_backend
+        if model_params == "unknown":
+            model_params = bench_params
 
     except (RuntimeError, OSError) as e:
         print(f"Error benchmarking {quant_type.name}: {e}")
