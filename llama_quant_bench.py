@@ -16,6 +16,7 @@ import urllib.request
 from dataclasses import dataclass
 from enum import IntEnum
 from itertools import groupby
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +41,8 @@ class ExitCode(IntEnum):
 # GLOBAL CONFIGURATION
 # =============================================================================
 
-DEFAULT_PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
-DEFAULT_TOKEN_GENERATION_TESTS = [128, 256, 512]  # tg128, tg256, tg512
+DEFAULT_PERPLEXITY_TESTS: tuple[int, ...] = (512, 1024, 2048)  # pp512, pp1024, pp2048
+DEFAULT_TOKEN_GENERATION_TESTS: tuple[int, ...] = (128, 256, 512)  # tg128, tg256, tg512
 DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
 CONVERTER_URL = (
@@ -102,6 +103,8 @@ ERR_BENCH_FAILED = "Benchmark failed: {}"
 ERR_QUANTIZE_NOT_FOUND = "llama-quantize not found in PATH"
 ERR_INVALID_TEST_VALUES = "Invalid test values: {}"
 ERR_EMPTY_TEST_VALUES = "Empty test values"
+ERR_NEGATIVE_TEST_VALUE = "Test values must be positive integers, got: {}"
+ERR_TEST_VALUE_TOO_LARGE = "Test value {} exceeds maximum allowed value of {}"
 
 
 # =============================================================================
@@ -137,14 +140,34 @@ def run_subprocess(cmd: list[str], error_msg: str) -> str:
     return output
 
 
+MAX_TEST_VALUE = 100000  # Maximum allowed test value to prevent memory issues
+
+
 def parse_test_values(value: str) -> list[int]:
     """Parse comma-separated test values from CLI argument.
 
-    Returns parsed list or raises ValueError if empty.
+    Args:
+        value: Comma-separated string of integers
+
+    Returns:
+        List of parsed positive integers
+
+    Raises:
+        ValueError: If value is empty, contains non-positive integers,
+            or values exceed maximum allowed
     """
     if not value.strip():
         raise ValueError(ERR_EMPTY_TEST_VALUES)
-    return [int(x.strip()) for x in value.split(",")]
+
+    values = [int(x.strip()) for x in value.split(",")]
+
+    for v in values:
+        if v <= 0:
+            raise ValueError(ERR_NEGATIVE_TEST_VALUE.format(v))
+        if v > MAX_TEST_VALUE:
+            raise ValueError(ERR_TEST_VALUE_TOO_LARGE.format(v, MAX_TEST_VALUE))
+
+    return values
 
 
 # =============================================================================
@@ -267,7 +290,9 @@ def download_converter(output_path: Path) -> None:
         ssl_context = ssl.create_default_context()
 
     with (
-        urllib.request.urlopen(CONVERTER_URL, context=ssl_context) as response,  # noqa: S310
+        urllib.request.urlopen(  # noqa: S310
+            CONVERTER_URL, context=ssl_context, timeout=30
+        ) as response,
         output_path.open("wb") as f,
     ):
         f.write(response.read())
@@ -275,26 +300,33 @@ def download_converter(output_path: Path) -> None:
 
 
 def convert_hf_to_gguf(hf_dir: Path, output_path: Path) -> None:
-    """Convert HuggingFace model to GGUF format."""
-    converter_path = Path(tempfile.gettempdir()) / "convert_hf_to_gguf.py"
+    """Convert HuggingFace model to GGUF format.
 
-    if not converter_path.exists():
+    Downloads the converter script to a temporary directory and cleans it up
+    after conversion.
+    """
+    temp_converter_dir = tempfile.TemporaryDirectory()
+    converter_path = Path(temp_converter_dir.name) / "convert_hf_to_gguf.py"
+
+    try:
         download_converter(converter_path)
 
-    print(f"Converting HuggingFace model from {hf_dir} to {output_path}...")
+        print(f"Converting HuggingFace model from {hf_dir} to {output_path}...")
 
-    cmd = [
-        sys.executable,
-        str(converter_path),
-        str(hf_dir),
-        "--outfile",
-        str(output_path),
-        "--outtype",
-        "auto",
-    ]
+        cmd = [
+            sys.executable,
+            str(converter_path),
+            str(hf_dir),
+            "--outfile",
+            str(output_path),
+            "--outtype",
+            "auto",
+        ]
 
-    run_subprocess(cmd, "Failed to convert model: {}")
-    print("Conversion successful")
+        run_subprocess(cmd, "Failed to convert model: {}")
+        print("Conversion successful")
+    finally:
+        temp_converter_dir.cleanup()
 
 
 def infer_model_name(model_path: Path) -> str:
@@ -314,6 +346,17 @@ def infer_model_name(model_path: Path) -> str:
 # =============================================================================
 
 
+# Expected column indices for llama-bench output parsing
+# Format: | model | size | params | backend | n_threads | test | t/s |
+COLUMN_MODEL = 0
+COLUMN_SIZE = 1
+COLUMN_PARAMS = 2
+COLUMN_BACKEND = 3
+COLUMN_TEST = 5
+COLUMN_TOKENS_PER_SEC = 6
+MIN_COLUMNS_REQUIRED = 7
+
+
 def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
     """Parse llama-bench markdown output.
 
@@ -327,14 +370,14 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
         if stripped.startswith("|") and "±" in stripped:
             parts = [p.strip() for p in stripped.split("|") if p.strip()]
 
-            if len(parts) >= 7:
+            if len(parts) >= MIN_COLUMNS_REQUIRED:
                 try:
-                    model = parts[0]
-                    size_str = parts[1]
-                    params_str = parts[2]
-                    backend = parts[3]
-                    test = parts[5]
-                    t_s_str = parts[6]
+                    model = parts[COLUMN_MODEL]
+                    size_str = parts[COLUMN_SIZE]
+                    params_str = parts[COLUMN_PARAMS]
+                    backend = parts[COLUMN_BACKEND]
+                    test = parts[COLUMN_TEST]
+                    t_s_str = parts[COLUMN_TOKENS_PER_SEC]
 
                     # Parse size (extract number from "4.70 GiB")
                     size_match = re.search(r"([\d.]+)\s*GiB", size_str)
@@ -471,6 +514,20 @@ def run_full_benchmark(
 # =============================================================================
 
 
+def _format_row_quant(r: BenchmarkResult) -> str:
+    """Format row for quant grouping."""
+    size_str = f"{r.model_size_gib:.2f} GiB"
+    tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
+    return f"| {r.quant_type} | {size_str} | {r.test_name} | {tps_str} |"
+
+
+def _format_row_test(r: BenchmarkResult) -> str:
+    """Format row for test grouping."""
+    size_str = f"{r.model_size_gib:.2f} GiB"
+    tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
+    return f"| {r.test_name} | {r.quant_type} | {size_str} | {tps_str} |"
+
+
 def _generate_grouped_rows(
     results: list[BenchmarkResult],
     grouping: str,
@@ -482,24 +539,15 @@ def _generate_grouped_rows(
     if grouping == "quant":
         header = ["| Quantization | Model size | Test | Tokens/second |"]
         separator = ["| ------------ | ---------- | ---- | ------------- |"]
-        sort_key = lambda x: x.quant_type  # noqa: E731
-        group_key = lambda x: x.quant_type  # noqa: E731
-
-        def format_row(r: BenchmarkResult) -> str:
-            size_str = f"{r.model_size_gib:.2f} GiB"
-            tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
-            return f"| {r.quant_type} | {size_str} | {r.test_name} | {tps_str} |"
-
+        sort_key = attrgetter("quant_type")
+        group_key = attrgetter("quant_type")
+        format_row = _format_row_quant
     else:  # grouping == "test"
         header = ["| Test | Quantization | Model size | Tokens/second |"]
         separator = ["| ---- | ------------ | ---------- | ------------- |"]
-        sort_key = lambda x: x.test_name  # noqa: E731
-        group_key = lambda x: x.test_name  # noqa: E731
-
-        def format_row(r: BenchmarkResult) -> str:
-            size_str = f"{r.model_size_gib:.2f} GiB"
-            tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
-            return f"| {r.test_name} | {r.quant_type} | {size_str} | {tps_str} |"
+        sort_key = attrgetter("test_name")
+        group_key = attrgetter("test_name")
+        format_row = _format_row_test
 
     lines: list[str] = []
     sorted_results = sorted(results, key=sort_key)
