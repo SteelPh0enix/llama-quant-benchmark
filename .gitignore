@@ -13,3 +13,4 @@ __pycache__/
 htmlcov/
 *.xml
 *.pyc
+*.log

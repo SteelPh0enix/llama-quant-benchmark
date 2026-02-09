@@ -8,6 +8,7 @@ import argparse
 import datetime
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -234,8 +235,14 @@ def download_converter(output_path: Path) -> None:
     """Download the convert_hf_to_gguf.py script."""
     print(f"Downloading converter to {output_path}...")
 
+    # On NixOS, try to use the NixOS CA certificate bundle
+    nixos_cert_path = "/etc/ssl/certs/ca-certificates.crt"
+    if Path(nixos_cert_path).exists():
+        ssl_context = ssl.create_default_context(cafile=nixos_cert_path)
+    else:
+        ssl_context = ssl.create_default_context()
     with (
-        urllib.request.urlopen(CONVERTER_URL) as response,  # noqa: S310
+        urllib.request.urlopen(CONVERTER_URL, context=ssl_context) as response,  # noqa: S310
         output_path.open("wb") as f,
     ):
         f.write(response.read())
