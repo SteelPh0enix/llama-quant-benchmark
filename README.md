@@ -27,6 +27,7 @@ Ensure you have Python 3.13+ and `llama-bench`/`llama-quantize` from llama.cpp i
 It's strongly recommended to create a virtual environment for running the script:
 
 **Using uv (recommended):**
+
 ```bash
 # Create virtual environment
 uv venv
@@ -39,6 +40,7 @@ uv sync
 ```
 
 **Using standard Python venv:**
+
 ```bash
 # Create virtual environment
 python -m venv .venv
@@ -69,8 +71,7 @@ Model name will be inferred from directory name (in case of HuggingFace model fo
 - `--keep-quants` - Keep generated quants after benchmarking (only useful with `--quant-dir`)
 - `--keep-original-gguf` - Keep the original GGUF file after converting from HuggingFace (only useful with `--quant-dir`)
 - `--quants <list>` - Comma-separated list of quantization types to benchmark (default: all available)
-- `--output <path>` - Path to output file (default: `quant-benchmark-report.md`)
-- `--group <quant|test>` - Group results by quantization type or test type (default: `quant`)
+- `--output-dir <path>` - Directory to save reports (default: current directory)
 - `--perplexity-tests <values>` - Comma-separated list of perplexity test values (default: `512,1024,2048`)
 - `--token-generation-tests <values>` - Comma-separated list of token generation test values (default: `128,256,512`)
 
@@ -93,9 +94,6 @@ python llama_quant_bench.py --model /path/to/model.gguf --quants Q4_K,Q5_K
 # Keep quantized files in a specific directory
 python llama_quant_bench.py --model /path/to/model --quant-dir ./quants --keep-quants
 
-# Group results by test type instead of quantization
-python llama_quant_bench.py --model /path/to/model --group test
-
 # Custom perplexity and token generation tests
 python llama_quant_bench.py --model /path/to/model --perplexity-tests 256,512 --token-generation-tests 64,128
 
@@ -103,11 +101,16 @@ python llama_quant_bench.py --model /path/to/model --perplexity-tests 256,512 --
 python llama_quant_bench.py --model /path/to/model -t 8
 ```
 
-## Generated report
+## Generated reports
 
-The script will report progress (and the output from used tools) on standard output, and after performing all the benchmarks it will produce a comprehensive report in Markdown format.
+The script will report progress (and the output from used tools) on standard output, and after performing all the benchmarks it will produce two comprehensive reports in Markdown format, saved to the specified output directory (current directory by default).
 
-The following shows that report's structure:
+Reports are timestamped to prevent overwriting previous results. The filenames follow this pattern:
+
+- `<model_name>_by-quant_YYYYMMDD_HHMMSS.md` - Results grouped by quantization type
+- `<model_name>_by-test_YYYYMMDD_HHMMSS.md` - Results grouped by test type
+
+### Report grouped by quantization type
 
 ```markdown
 # llama-quant-benchmark for `<model name>` (`<amount of model parameters>`)
@@ -125,11 +128,30 @@ Used backend: `<backend used by llama-bench>`
 Additional `llama-bench` arguments: `<user-provided arguments to llama-bench>`
 ```
 
+### Report grouped by test type
+
+```markdown
+# llama-quant-benchmark for `<model name>` (`<amount of model parameters>`)
+
+| Test  | Quantization | Model size | Tokens/second |
+|-------|--------------|------------|---------------|
+| pp512 |     QX_A     |  S.SS GiB  | AAAA ± B.BB   |
+| pp512 |     QY_B     |  S.SS GiB  | EEEE ± F.FF   |
+|-------|--------------|------------|---------------|
+| tg128 |     QX_A     |  S.SS GiB  | CCCC ± D.DD   |
+| tg128 |     QY_B     |  S.SS GiB  | GGGG ± H.HH   |
+
+Generated on `<current date/time>`
+Used backend: `<backend used by llama-bench>`
+Additional `llama-bench` arguments: `<user-provided arguments to llama-bench>`
+```
+
 ## Troubleshooting
 
 ### llama-quantize not found
 
 Ensure that `llama-quantize` and `llama-bench` from the llama.cpp project are built and available in your PATH. You can verify this by running:
+
 ```bash
 which llama-quantize
 which llama-bench
@@ -138,6 +160,7 @@ which llama-bench
 ### Conversion fails
 
 If converting from HuggingFace format fails:
+
 - Ensure the model directory contains valid HuggingFace format files (`config.json`, `model.safetensors` or `pytorch_model.bin`, etc.)
 - Check that you have sufficient disk space (2-3x the model size)
 - Verify your internet connection (the converter script is downloaded from GitHub)
@@ -145,6 +168,7 @@ If converting from HuggingFace format fails:
 ### Out of memory errors
 
 If you encounter OOM errors during benchmarking:
+
 - Reduce perplexity test values: `--perplexity-tests 256,512`
 - Reduce token generation test values: `--token-generation-tests 64,128`
 - Use smaller quantization types
