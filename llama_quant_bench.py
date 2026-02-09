@@ -43,7 +43,7 @@ class ExitCode(IntEnum):
 # GLOBAL CONFIGURATION
 # =============================================================================
 
-DEFAULT_PERPLEXITY_TESTS: tuple[int, ...] = (512, 1024, 2048)  # pp512, pp1024, pp2048
+DEFAULT_PERPLEXITY_TESTS: tuple[int, ...] = (512, 1024, 2048, 4096)  # pp512, pp1024, pp2048, pp4096
 DEFAULT_TOKEN_GENERATION_TESTS: tuple[int, ...] = (128, 256, 512)  # tg128, tg256, tg512
 
 # Default quantization types to use when user doesn't specify any
@@ -694,7 +694,7 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
         for quant_name in report.failed_quants:
             lines.append(f"- {quant_name}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def save_reports(report: BenchmarkReport, output_dir: Path) -> None:
