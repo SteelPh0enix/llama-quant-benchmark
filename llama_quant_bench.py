@@ -468,8 +468,6 @@ def run_full_benchmark(
     parsed = parse_llama_bench_output(output)
 
     # Create set of valid test names for filtering
-    # TODO(SteelPh0enix): Instead, the script should always specify the tests while calling
-    # llama-bench.
     valid_tests = {f"pp{pp}" for pp in perplexity_tests} | {
         f"tg{tg}" for tg in token_generation_tests
     }
@@ -724,7 +722,7 @@ def convert_model_if_needed(
         base_gguf_path = quant_dir / f"{model_name}-base.gguf"
         try:
             convert_hf_to_gguf(model_path, base_gguf_path)
-            return base_gguf_path, base_gguf_path
+            return base_gguf_path, base_gguf_path  # noqa: TRY300
         except (RuntimeError, OSError) as e:
             print(f"Error converting model: {e}")
             sys.exit(ExitCode.MODEL_CONVERSION_FAILED)
