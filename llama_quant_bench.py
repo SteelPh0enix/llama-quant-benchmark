@@ -44,20 +44,13 @@ DEFAULT_PERPLEXITY_TESTS = [512, 1024, 2048]  # pp512, pp1024, pp2048
 DEFAULT_TOKEN_GENERATION_TESTS = [128, 256, 512]  # tg128, tg256, tg512
 DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
-
-def parse_test_values(value: str) -> list[int]:
-    """Parse comma-separated test values from CLI argument.
-
-    Returns parsed list or default if empty.
-    """
-    if not value.strip():
-        raise ValueError
-    return [int(x.strip()) for x in value.split(",")]
-
-
 CONVERTER_URL = (
     "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/convert_hf_to_gguf.py"
 )
+
+# Regex pattern for parsing quantization types from llama-quantize --help
+# Matches lines like "15  or  Q4_K_M  :  4.58G, +0.1754 ppl @ Llama-3-8B"
+QUANT_PATTERN = re.compile(r"^\s*(\d+)\s+or\s+(\S+)\s*:", re.MULTILINE)
 
 
 # =============================================================================
@@ -108,6 +101,50 @@ ERR_QUANT_FAILED = "Quantization failed: {}"
 ERR_BENCH_FAILED = "Benchmark failed: {}"
 ERR_QUANTIZE_NOT_FOUND = "llama-quantize not found in PATH"
 ERR_INVALID_TEST_VALUES = "Invalid test values: {}"
+ERR_EMPTY_TEST_VALUES = "Empty test values"
+
+
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+
+def run_subprocess(cmd: list[str], error_msg: str) -> str:
+    """Run a subprocess command and return combined output.
+
+    Args:
+        cmd: Command and arguments to run
+        error_msg: Error message template for failures
+
+    Returns:
+        Combined stdout and stderr output
+
+    Raises:
+        RuntimeError: If the command fails
+    """
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+        print(result.stderr, file=sys.stderr)
+
+    print(result.stdout)
+
+    if result.returncode != 0:
+        raise RuntimeError(error_msg.format(result.stderr or result.stdout))
+
+    return output
+
+
+def parse_test_values(value: str) -> list[int]:
+    """Parse comma-separated test values from CLI argument.
+
+    Returns parsed list or raises ValueError if empty.
+    """
+    if not value.strip():
+        raise ValueError(ERR_EMPTY_TEST_VALUES)
+    return [int(x.strip()) for x in value.split(",")]
 
 
 # =============================================================================
@@ -123,23 +160,13 @@ def get_available_quants() -> dict[str, QuantizationType]:
     quantize_bin = shutil.which("llama-quantize")
     if quantize_bin is None:
         raise RuntimeError(ERR_QUANTIZE_NOT_FOUND)
-    result = subprocess.run(
-        [quantize_bin, "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
-    output = result.stdout + result.stderr
+    output = run_subprocess([quantize_bin, "--help"], "Failed to get quantization types: {}")
 
     # Parse the "Allowed quantization types:" section
     quants: dict[str, QuantizationType] = {}
 
-    # Regex pattern: matches lines like "15  or  Q4_K_M  :  4.58G, +0.1754 ppl @ Llama-3-8B"
-    # or "  0  or  F32     : 26.00G              @ 7B"
-    quant_pattern = re.compile(r"^\s*(\d+)\s+or\s+(\S+)\s*:", re.MULTILINE)
-
-    for match in quant_pattern.finditer(output):
+    for match in QUANT_PATTERN.finditer(output):
         qid = int(match.group(1))
         name = match.group(2)
         qt = QuantizationType(id=qid, name=name)
@@ -163,27 +190,24 @@ def parse_user_quants(
         raise ValueError(ERR_NO_QUANTS)
 
     # Check if mixing names and IDs
-    has_name = False
-    has_id = False
-
-    for item in items:
-        if item.isdigit():
-            has_id = True
-        else:
-            has_name = True
+    has_name = any(not item.isdigit() for item in items)
+    has_id = any(item.isdigit() for item in items)
 
     if has_name and has_id:
         raise ValueError(ERR_MIXED_NAMES_IDS)
 
     # Validate and return
     result: list[QuantizationType] = []
+    seen_ids: set[int] = set()
+
     for item in items:
         lookup_key = item if item.isdigit() else item.upper()
         if lookup_key not in available_quants:
             raise ValueError(ERR_UNKNOWN_QUANT.format(item))
         qt = available_quants[lookup_key]
         # Avoid duplicates
-        if qt not in result:
+        if qt.id not in seen_ids:
+            seen_ids.add(qt.id)
             result.append(qt)
 
     return result
@@ -241,6 +265,7 @@ def download_converter(output_path: Path) -> None:
         ssl_context = ssl.create_default_context(cafile=nixos_cert_path)
     else:
         ssl_context = ssl.create_default_context()
+
     with (
         urllib.request.urlopen(CONVERTER_URL, context=ssl_context) as response,  # noqa: S310
         output_path.open("wb") as f,
@@ -257,27 +282,18 @@ def convert_hf_to_gguf(hf_dir: Path, output_path: Path) -> None:
         download_converter(converter_path)
 
     print(f"Converting HuggingFace model from {hf_dir} to {output_path}...")
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(converter_path),
-            str(hf_dir),
-            "--outfile",
-            str(output_path),
-            "--outtype",
-            "auto",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
-    if result.returncode != 0:
-        print(f"Conversion stdout: {result.stdout}")
-        print(f"Conversion stderr: {result.stderr}")
-        msg = f"Failed to convert model: {result.stderr}"
-        raise RuntimeError(msg)
+    cmd = [
+        sys.executable,
+        str(converter_path),
+        str(hf_dir),
+        "--outfile",
+        str(output_path),
+        "--outtype",
+        "auto",
+    ]
 
+    run_subprocess(cmd, "Failed to convert model: {}")
     print("Conversion successful")
 
 
@@ -305,16 +321,13 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
     """
     results: list[dict[str, Any]] = []
 
-    # Split into lines and look for table rows
-    lines = output.split("\n")
-
-    for raw_line in lines:
-        stripped = raw_line.strip()
+    for line in output.split("\n"):
+        stripped = line.strip()
         # Look for lines that start with "|" and have data (not headers or separators)
         if stripped.startswith("|") and "±" in stripped:
             parts = [p.strip() for p in stripped.split("|") if p.strip()]
 
-            if len(parts) >= 6:
+            if len(parts) >= 7:
                 try:
                     model = parts[0]
                     size_str = parts[1]
@@ -341,7 +354,7 @@ def parse_llama_bench_output(output: str) -> list[dict[str, Any]]:
                             "test": test,
                             "tokens_per_sec": tokens_per_sec,
                             "std_dev": std_dev,
-                        },
+                        }
                     )
                 except (IndexError, ValueError):
                     # Skip malformed lines
@@ -361,20 +374,9 @@ def quantize_model(input_path: Path, output_path: Path, quant_type: Quantization
     quantize_bin = shutil.which("llama-quantize")
     if quantize_bin is None:
         raise RuntimeError(ERR_QUANTIZE_NOT_FOUND)
-    result = subprocess.run(
-        [quantize_bin, str(input_path), str(output_path), str(quant_type.id)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-
-    if result.returncode != 0:
-        msg = ERR_QUANT_FAILED.format(result.stderr)
-        raise RuntimeError(msg)
+    cmd = [quantize_bin, str(input_path), str(output_path), str(quant_type.id)]
+    run_subprocess(cmd, ERR_QUANT_FAILED)
 
     print(f"Quantization successful: {output_path}")
 
@@ -394,37 +396,6 @@ def _filter_llama_bench_args(args: list[str]) -> list[str]:
     return [a for a in args if a not in excluded]
 
 
-def run_benchmark(
-    model_path: Path,
-    test_prompt: int | None = None,
-    test_gen: int | None = None,
-    extra_args: list[str] | None = None,
-) -> str:
-    """Run llama-bench and return the output."""
-    cmd = ["llama-bench", "-m", str(model_path)]
-
-    if test_prompt:
-        cmd.extend(["-p", str(test_prompt)])
-    elif test_gen:
-        cmd.extend(["-n", str(test_gen)])
-
-    if extra_args:
-        cmd.extend(_filter_llama_bench_args(extra_args))
-
-    print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-
-    if result.returncode != 0:
-        msg = ERR_BENCH_FAILED.format(result.stderr)
-        raise RuntimeError(msg)
-
-    return result.stdout + result.stderr
-
-
 def run_benchmark_all_tests(
     model_path: Path,
     perplexity_tests: list[int],
@@ -442,17 +413,7 @@ def run_benchmark_all_tests(
         cmd.extend(_filter_llama_bench_args(extra_args))
 
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-
-    if result.returncode != 0:
-        msg = ERR_BENCH_FAILED.format(result.stderr)
-        raise RuntimeError(msg)
-
-    return result.stdout + result.stderr
+    return run_subprocess(cmd, ERR_BENCH_FAILED)
 
 
 def run_full_benchmark(
@@ -510,6 +471,51 @@ def run_full_benchmark(
 # =============================================================================
 
 
+def _generate_grouped_rows(
+    results: list[BenchmarkResult],
+    grouping: str,
+) -> tuple[list[str], list[str]]:
+    """Generate table rows grouped by quant type or test name.
+
+    Returns tuple of (header_lines, data_lines).
+    """
+    if grouping == "quant":
+        header = ["| Quantization | Model size | Test | Tokens/second |"]
+        separator = ["| ------------ | ---------- | ---- | ------------- |"]
+        sort_key = lambda x: x.quant_type  # noqa: E731
+        group_key = lambda x: x.quant_type  # noqa: E731
+
+        def format_row(r: BenchmarkResult) -> str:
+            size_str = f"{r.model_size_gib:.2f} GiB"
+            tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
+            return f"| {r.quant_type} | {size_str} | {r.test_name} | {tps_str} |"
+
+    else:  # grouping == "test"
+        header = ["| Test | Quantization | Model size | Tokens/second |"]
+        separator = ["| ---- | ------------ | ---------- | ------------- |"]
+        sort_key = lambda x: x.test_name  # noqa: E731
+        group_key = lambda x: x.test_name  # noqa: E731
+
+        def format_row(r: BenchmarkResult) -> str:
+            size_str = f"{r.model_size_gib:.2f} GiB"
+            tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
+            return f"| {r.test_name} | {r.quant_type} | {size_str} | {tps_str} |"
+
+    lines: list[str] = []
+    sorted_results = sorted(results, key=sort_key)
+
+    first_group = True
+    for _group_val, group in groupby(sorted_results, key=group_key):
+        if not first_group:
+            lines.extend(separator)
+        first_group = False
+
+        for result in group:
+            lines.append(format_row(result))
+
+    return header + separator, lines
+
+
 def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     """Generate markdown report with specified grouping."""
     lines: list[str] = []
@@ -518,49 +524,9 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     lines.append(f"# llama-quant-benchmark for `{report.model_name}` ({report.model_params})")
     lines.append("")
 
-    if grouping == "quant":
-        # Group by quantization type
-        lines.append("| Quantization | Model size | Test | Tokens/second |")
-        lines.append("| ------------ | ---------- | ---- | ------------- |")
-
-        # Group results by quant type
-        sorted_results = sorted(report.results, key=lambda x: x.quant_type)
-
-        first_group = True
-        for _quant_type, group in groupby(sorted_results, key=lambda x: x.quant_type):
-            if not first_group:
-                # Add separator between groups
-                lines.append("| ------------ | ---------- | ---- | ------------- |")
-            first_group = False
-
-            for result in group:
-                size_str = f"{result.model_size_gib:.2f} GiB"
-                tps_str = f"{result.tokens_per_sec:.2f} ± {result.std_dev:.2f}"
-                lines.append(
-                    f"| {result.quant_type} | {size_str} | {result.test_name} | {tps_str} |",
-                )
-
-    else:  # grouping == "test"
-        # Group by test type
-        lines.append("| Test | Quantization | Model size | Tokens/second |")
-        lines.append("| ---- | ------------ | ---------- | ------------- |")
-
-        # Group results by test name
-        sorted_results = sorted(report.results, key=lambda x: x.test_name)
-
-        first_group = True
-        for _test_name, group in groupby(sorted_results, key=lambda x: x.test_name):
-            if not first_group:
-                # Add separator between groups
-                lines.append("| ---- | ------------ | ---------- | ------------- |")
-            first_group = False
-
-            for result in group:
-                size_str = f"{result.model_size_gib:.2f} GiB"
-                tps_str = f"{result.tokens_per_sec:.2f} ± {result.std_dev:.2f}"
-                lines.append(
-                    f"| {result.test_name} | {result.quant_type} | {size_str} | {tps_str} |",
-                )
+    header_lines, data_lines = _generate_grouped_rows(report.results, grouping)
+    lines.extend(header_lines)
+    lines.extend(data_lines)
 
     # Footer
     lines.append("")
@@ -576,9 +542,7 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
 def save_report(report: BenchmarkReport, output_path: Path, grouping: str) -> None:
     """Save the report to a file."""
     markdown = generate_markdown_report(report, grouping)
-
     output_path.write_text(markdown)
-
     print(f"\nReport saved to: {output_path}")
 
 
@@ -819,7 +783,7 @@ def run_all_benchmarks(
         all_results.extend(results)
         if be != "unknown" and backend == "unknown":
             backend = be
-        if mp != "unknown" and backend == "unknown":
+        if mp != "unknown" and model_params == "unknown":
             model_params = mp
 
     return all_results, backend, model_params
