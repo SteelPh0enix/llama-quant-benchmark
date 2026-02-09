@@ -45,7 +45,6 @@ class ExitCode(IntEnum):
 
 DEFAULT_PERPLEXITY_TESTS: tuple[int, ...] = (512, 1024, 2048)  # pp512, pp1024, pp2048
 DEFAULT_TOKEN_GENERATION_TESTS: tuple[int, ...] = (128, 256, 512)  # tg128, tg256, tg512
-DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
 # Default quantization types to use when user doesn't specify any
 # Excludes TQ* quants (36=TQ1_0, 37=TQ2_0) as they are incompatible with most models
@@ -698,11 +697,27 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     return "\n".join(lines)
 
 
-def save_report(report: BenchmarkReport, output_path: Path, grouping: str) -> None:
-    """Save the report to a file."""
-    markdown = generate_markdown_report(report, grouping)
-    output_path.write_text(markdown)
-    print(f"\nReport saved to: {output_path}")
+def save_reports(report: BenchmarkReport, output_dir: Path) -> None:
+    """Save both 'by-quant' and 'by-test' reports to the output directory.
+
+    Reports are saved with timestamped filenames to avoid overwriting.
+    """
+    timestamp = report.generated_at.strftime("%Y%m%d_%H%M%S")
+    model_name = report.model_name.replace(" ", "_")
+
+    # Generate and save "by-quant" report
+    quant_filename = f"{model_name}_by-quant_{timestamp}.md"
+    quant_path = output_dir / quant_filename
+    quant_markdown = generate_markdown_report(report, "quant")
+    quant_path.write_text(quant_markdown)
+    print(f"\nReport (by quant) saved to: {quant_path}")
+
+    # Generate and save "by-test" report
+    test_filename = f"{model_name}_by-test_{timestamp}.md"
+    test_path = output_dir / test_filename
+    test_markdown = generate_markdown_report(report, "test")
+    test_path.write_text(test_markdown)
+    print(f"Report (by test) saved to: {test_path}")
 
 
 # =============================================================================
@@ -719,8 +734,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
 Examples:
   python llama-quant-bench.py --model /path/to/model
   python llama-quant-bench.py --model /path/to/model.gguf --quants Q4_K,Q5_K
-  python llama-quant-bench.py --model /path/to/model --keep-quants --output my-report.md
-  python llama-quant-bench.py --model /path/to/model --group test -t 8
+  python llama-quant-bench.py --model /path/to/model --keep-quants --output-dir ./reports
         """,
     )
 
@@ -759,15 +773,9 @@ Examples:
         help="Comma-separated list of quantization types to benchmark (default: all available)",
     )
     parser.add_argument(
-        "--output",
-        default="quant-benchmark-report.md",
-        help="Path to output file (default: quant-benchmark-report.md)",
-    )
-    parser.add_argument(
-        "--group",
-        choices=["quant", "test"],
-        default=DEFAULT_GROUPING,
-        help="Group results by quantization type or test type (default: quant)",
+        "--output-dir",
+        default=".",
+        help="Directory to save reports (default: current directory)",
     )
     parser.add_argument(
         "--perplexity-tests",
@@ -1051,7 +1059,8 @@ def main() -> None:
         print("\nError: No benchmark results collected")
         sys.exit(ExitCode.NO_RESULTS)
 
-    output_path = Path(args.output)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     report = BenchmarkReport(
         model_name=model_name,
         model_params=model_params,
@@ -1062,7 +1071,7 @@ def main() -> None:
         failed_quants=failed_quants,
     )
 
-    save_report(report, output_path, args.group)
+    save_reports(report, output_dir)
 
     print("\nBenchmark complete!")
 
