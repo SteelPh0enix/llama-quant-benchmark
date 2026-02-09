@@ -12,6 +12,8 @@ dependencies = [
     "sentencepiece>=0.2.1",
     "gguf",
     "mistral-common>=1.9.0",
+    "prettytable>=3.17.0",
+    "types-prettytable>=3.4.2.6",
 ]
 
 [tool.uv.sources]

@@ -20,6 +20,8 @@ from operator import attrgetter
 from pathlib import Path
 from typing import Any
 
+from prettytable import PrettyTable, TableStyle  # type: ignore[import-untyped]
+
 # =============================================================================
 # EXIT CODES
 # =============================================================================
@@ -184,9 +186,17 @@ def get_available_quants() -> dict[str, QuantizationType]:
     if quantize_bin is None:
         raise RuntimeError(ERR_QUANTIZE_NOT_FOUND)
 
-    output = run_subprocess([quantize_bin, "--help"], "Failed to get quantization types: {}")
+    result = subprocess.run([quantize_bin, "--help"], capture_output=True, text=True, check=False)
+    output = result.stdout + result.stderr
 
-    # Parse the "Allowed quantization types:" section
+    return parse_quantization_output(output)
+
+
+def parse_quantization_output(output: str) -> dict[str, QuantizationType]:
+    """Parse quantization types from llama-quantize --help output.
+
+    Returns a mapping of names/IDs to QuantizationType objects.
+    """
     quants: dict[str, QuantizationType] = {}
 
     for match in QUANT_PATTERN.finditer(output):
@@ -226,6 +236,7 @@ def parse_user_quants(
     for item in items:
         lookup_key = item if item.isdigit() else item.upper()
         if lookup_key not in available_quants:
+            print_available_quants(available_quants)
             raise ValueError(ERR_UNKNOWN_QUANT.format(item))
         qt = available_quants[lookup_key]
         # Avoid duplicates
@@ -234,6 +245,29 @@ def parse_user_quants(
             result.append(qt)
 
     return result
+
+
+def print_available_quants(available_quants: dict[str, QuantizationType]) -> None:
+    """Print all available quantization types as a markdown table to stdout."""
+    # Get unique quantizations by ID
+    unique_quants: dict[int, str] = {}
+    for key, qt in available_quants.items():
+        if not key.isdigit() and qt.id not in unique_quants:
+            unique_quants[qt.id] = qt.name
+
+    # Sort by ID
+    sorted_quants = sorted(unique_quants.items(), key=lambda x: x[0])
+
+    # Create table using PrettyTable with Markdown style
+    table = PrettyTable(["ID", "Name"])  # type: ignore[no-untyped-call]
+    table.set_style(TableStyle.MARKDOWN)  # type: ignore[no-untyped-call]
+    table.align = "l"
+
+    for qid, name in sorted_quants:
+        table.add_row([qid, name])  # type: ignore[no-untyped-call]
+
+    print("\nAvailable quantization types:")
+    print(table)
 
 
 def get_default_quants(
@@ -514,54 +548,45 @@ def run_full_benchmark(
 # =============================================================================
 
 
-def _format_row_quant(r: BenchmarkResult) -> str:
-    """Format row for quant grouping."""
-    size_str = f"{r.model_size_gib:.2f} GiB"
-    tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
-    return f"| {r.quant_type} | {size_str} | {r.test_name} | {tps_str} |"
-
-
-def _format_row_test(r: BenchmarkResult) -> str:
-    """Format row for test grouping."""
-    size_str = f"{r.model_size_gib:.2f} GiB"
-    tps_str = f"{r.tokens_per_sec:.2f} ± {r.std_dev:.2f}"
-    return f"| {r.test_name} | {r.quant_type} | {size_str} | {tps_str} |"
-
-
 def _generate_grouped_rows(
     results: list[BenchmarkResult],
     grouping: str,
-) -> tuple[list[str], list[str]]:
+) -> list[list[str]]:
     """Generate table rows grouped by quant type or test name.
 
-    Returns tuple of (header_lines, data_lines).
+    Returns list of table rows (including headers) for tabulate.
     """
     if grouping == "quant":
-        header = ["| Quantization | Model size | Test | Tokens/second |"]
-        separator = ["| ------------ | ---------- | ---- | ------------- |"]
+        headers = ["Quantization", "Model size", "Test", "Tokens/second"]
         sort_key = attrgetter("quant_type")
         group_key = attrgetter("quant_type")
-        format_row = _format_row_quant
     else:  # grouping == "test"
-        header = ["| Test | Quantization | Model size | Tokens/second |"]
-        separator = ["| ---- | ------------ | ---------- | ------------- |"]
+        headers = ["Test", "Quantization", "Model size", "Tokens/second"]
         sort_key = attrgetter("test_name")
         group_key = attrgetter("test_name")
-        format_row = _format_row_test
 
-    lines: list[str] = []
+    rows: list[list[str]] = [headers]
     sorted_results = sorted(results, key=sort_key)
 
-    first_group = True
     for _group_val, group in groupby(sorted_results, key=group_key):
-        if not first_group:
-            lines.extend(separator)
-        first_group = False
-
         for result in group:
-            lines.append(format_row(result))
+            if grouping == "quant":
+                row = [
+                    result.quant_type,
+                    f"{result.model_size_gib:.2f} GiB",
+                    result.test_name,
+                    f"{result.tokens_per_sec:.2f} ± {result.std_dev:.2f}",
+                ]
+            else:
+                row = [
+                    result.test_name,
+                    result.quant_type,
+                    f"{result.model_size_gib:.2f} GiB",
+                    f"{result.tokens_per_sec:.2f} ± {result.std_dev:.2f}",
+                ]
+            rows.append(row)
 
-    return header + separator, lines
+    return rows
 
 
 def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
@@ -572,9 +597,14 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     lines.append(f"# llama-quant-benchmark for `{report.model_name}` ({report.model_params})")
     lines.append("")
 
-    header_lines, data_lines = _generate_grouped_rows(report.results, grouping)
-    lines.extend(header_lines)
-    lines.extend(data_lines)
+    # Generate table using PrettyTable for proper formatting
+    table_rows = _generate_grouped_rows(report.results, grouping)
+    table = PrettyTable(table_rows[0])  # type: ignore[no-untyped-call]
+    table.set_style(TableStyle.MARKDOWN)  # type: ignore[no-untyped-call]
+    for row in table_rows[1:]:
+        table.add_row(row)  # type: ignore[no-untyped-call]
+    table.align = "l"  # Left align for better readability
+    lines.append(str(table))
 
     # Footer
     lines.append("")
@@ -615,7 +645,6 @@ Examples:
 
     parser.add_argument(
         "--model",
-        required=True,
         help="Path to directory with raw model weights from HuggingFace, or GGUF file",
     )
     parser.add_argument(
@@ -669,6 +698,11 @@ Examples:
         default=",".join(str(x) for x in DEFAULT_TOKEN_GENERATION_TESTS),
         help="Comma-separated list of token generation test values (default: 128,256,512)",
     )
+    parser.add_argument(
+        "--list-quants",
+        action="store_true",
+        help="List all available quantization types and exit",
+    )
 
     return parser
 
@@ -682,6 +716,13 @@ def validate_keep_flags(args: argparse.Namespace) -> None:
         if args.keep_original_gguf:
             print("Error: --keep-original-gguf can only be used with --quant-dir")
             sys.exit(ExitCode.INVALID_ARGUMENTS)
+
+
+def validate_model_argument(args: argparse.Namespace) -> None:
+    """Validate that model is provided when not using --list-quants."""
+    if not args.model and not args.list_quants:
+        print("Error: --model is required")
+        sys.exit(ExitCode.INVALID_ARGUMENTS)
 
 
 def validate_model_path(model_path: Path) -> None:
@@ -856,7 +897,19 @@ def main() -> None:
     parser = create_argument_parser()
     args, remaining_args = parser.parse_known_args()
 
+    # Handle --list-quants before validation
+    if args.list_quants:
+        print("Fetching available quantization types...")
+        try:
+            available_quants = get_available_quants()
+            print_available_quants(available_quants)
+            sys.exit(ExitCode.SUCCESS)
+        except (RuntimeError, OSError, ValueError) as e:
+            print(f"Error fetching quantization types: {e}")
+            sys.exit(ExitCode.QUANT_FETCH_FAILED)
+
     validate_keep_flags(args)
+    validate_model_argument(args)
     model_path = Path(args.model)
     validate_model_path(model_path)
 
