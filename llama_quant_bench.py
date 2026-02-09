@@ -47,6 +47,42 @@ DEFAULT_PERPLEXITY_TESTS: tuple[int, ...] = (512, 1024, 2048)  # pp512, pp1024, 
 DEFAULT_TOKEN_GENERATION_TESTS: tuple[int, ...] = (128, 256, 512)  # tg128, tg256, tg512
 DEFAULT_GROUPING = "quant"  # Default grouping: "quant" or "test"
 
+# Default quantization types to use when user doesn't specify any
+# Excludes TQ* quants (36=TQ1_0, 37=TQ2_0) as they are incompatible with most models
+DEFAULT_QUANT_TYPES: tuple[str, ...] = (
+    "F32",
+    "F16",
+    "Q4_0",
+    "Q4_1",
+    "Q8_0",
+    "Q5_0",
+    "Q5_1",
+    "Q2_K",
+    "Q3_K_S",
+    "Q3_K",
+    "Q3_K_L",
+    "Q4_K_S",
+    "Q4_K",
+    "Q5_K_S",
+    "Q5_K",
+    "Q6_K",
+    "IQ2_XXS",
+    "IQ2_XS",
+    "Q2_K_S",
+    "IQ3_XS",
+    "IQ3_XXS",
+    "IQ1_S",
+    "IQ4_NL",
+    "IQ3_S",
+    "IQ3_M",
+    "IQ2_S",
+    "IQ2_M",
+    "IQ4_XS",
+    "IQ1_M",
+    "BF16",
+    "MXFP4_MOE",
+)
+
 CONVERTER_URL = (
     "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/convert_hf_to_gguf.py"
 )
@@ -83,6 +119,7 @@ class BenchmarkReport:
     llama_bench_args: list[str]
     results: list[BenchmarkResult]
     generated_at: datetime.datetime
+    failed_quants: list[str]
 
 
 @dataclass
@@ -273,14 +310,17 @@ def print_available_quants(available_quants: dict[str, QuantizationType]) -> Non
 def get_default_quants(
     available_quants: dict[str, QuantizationType],
 ) -> list[QuantizationType]:
-    """Get default list of all quantization types (unique by ID)."""
+    """Get default list of quantization types, excluding TQ* quants."""
     seen_ids: set[int] = set()
     result: list[QuantizationType] = []
 
-    for key, qt in available_quants.items():
-        if key.isdigit() and qt.id not in seen_ids:
-            seen_ids.add(qt.id)
-            result.append(qt)
+    for quant_name in DEFAULT_QUANT_TYPES:
+        lookup_key = quant_name.upper()
+        if lookup_key in available_quants:
+            qt = available_quants[lookup_key]
+            if qt.id not in seen_ids:
+                seen_ids.add(qt.id)
+                result.append(qt)
 
     # Sort by ID
     result.sort(key=lambda x: x.id)
@@ -614,6 +654,13 @@ def generate_markdown_report(report: BenchmarkReport, grouping: str) -> str:
     if report.llama_bench_args:
         lines.append(f"Additional `llama-bench` arguments: `{' '.join(report.llama_bench_args)}`")
 
+    # Add failed quants message if any
+    if report.failed_quants:
+        lines.append("")
+        lines.append("**Note:** The following quantization types could not be tested:")
+        for quant_name in report.failed_quants:
+            lines.append(f"- {quant_name}")
+
     return "\n".join(lines)
 
 
@@ -800,8 +847,11 @@ def benchmark_single_quantization(
     remaining_args: list[str],
     *,
     keep_quants: bool,
-) -> tuple[list[BenchmarkResult], str, str]:
-    """Process a single quantization type."""
+) -> tuple[list[BenchmarkResult], str, str, bool]:
+    """Process a single quantization type.
+
+    Returns a tuple of (results, backend, model_params, success).
+    """
     print(f"\n{'=' * 60}")
     print(f"Benchmarking: {quant_type.name}")
     print(f"{'=' * 60}")
@@ -809,13 +859,14 @@ def benchmark_single_quantization(
     results: list[BenchmarkResult] = []
     backend = "unknown"
     model_params = "unknown"
+    success = False
 
     quant_path = quant_dir / f"{model_name}-{quant_type.name}.gguf"
     try:
         quantize_model(base_model_path, quant_path, quant_type)
     except (RuntimeError, OSError) as e:
         print(f"Error quantizing to {quant_type.name}: {e}")
-        return results, backend, model_params
+        return results, backend, model_params, success
 
     try:
         bench_results, bench_backend, bench_params = run_full_benchmark(
@@ -831,6 +882,7 @@ def benchmark_single_quantization(
             backend = bench_backend
         if model_params == "unknown":
             model_params = bench_params
+        success = True
 
     except (RuntimeError, OSError) as e:
         print(f"Error benchmarking {quant_type.name}: {e}")
@@ -839,7 +891,7 @@ def benchmark_single_quantization(
         quant_path.unlink()
         print(f"Deleted: {quant_path}")
 
-    return results, backend, model_params
+    return results, backend, model_params, success
 
 
 def run_all_benchmarks(
@@ -852,14 +904,18 @@ def run_all_benchmarks(
     remaining_args: list[str],
     *,
     keep_quants: bool,
-) -> tuple[list[BenchmarkResult], str, str]:
-    """Run benchmarks for all quantization types."""
+) -> tuple[list[BenchmarkResult], str, str, list[str]]:
+    """Run benchmarks for all quantization types.
+
+    Returns a tuple of (results, backend, model_params, failed_quants).
+    """
     all_results: list[BenchmarkResult] = []
     backend = "unknown"
     model_params = "unknown"
+    failed_quants: list[str] = []
 
     for quant_type in quant_types:
-        results, be, mp = benchmark_single_quantization(
+        results, be, mp, success = benchmark_single_quantization(
             quant_type,
             base_model_path,
             quant_dir,
@@ -874,8 +930,10 @@ def run_all_benchmarks(
             backend = be
         if mp != "unknown" and model_params == "unknown":
             model_params = mp
+        if not success:
+            failed_quants.append(quant_type.name)
 
-    return all_results, backend, model_params
+    return all_results, backend, model_params, failed_quants
 
 
 def cleanup_resources(
@@ -942,7 +1000,7 @@ def main() -> None:
     base_model_path, base_gguf_path = convert_model_if_needed(model_path, quant_dir, model_name)
 
     try:
-        all_results, backend, model_params = run_all_benchmarks(
+        all_results, backend, model_params, failed_quants = run_all_benchmarks(
             quant_types,
             base_model_path,
             quant_dir,
@@ -967,6 +1025,7 @@ def main() -> None:
         llama_bench_args=remaining_args,
         results=all_results,
         generated_at=datetime.datetime.now(tz=datetime.UTC),
+        failed_quants=failed_quants,
     )
 
     save_report(report, output_path, args.group)
