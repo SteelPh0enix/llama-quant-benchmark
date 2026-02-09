@@ -151,12 +151,13 @@ ERR_TEST_VALUE_TOO_LARGE = "Test value {} exceeds maximum allowed value of {}"
 # =============================================================================
 
 
-def run_subprocess(cmd: list[str], error_msg: str) -> str:
+def run_subprocess(cmd: list[str], error_msg: str, *, stream_output: bool = True) -> str:
     """Run a subprocess command and return combined output.
 
     Args:
         cmd: Command and arguments to run
         error_msg: Error message template for failures
+        stream_output: If True, stream output to stdout/stderr in real-time
 
     Returns:
         Combined stdout and stderr output
@@ -164,17 +165,50 @@ def run_subprocess(cmd: list[str], error_msg: str) -> str:
     Raises:
         RuntimeError: If the command fails
     """
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if not stream_output:
+        # For short-running commands, use the simple approach
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        output = result.stdout
+        if result.stderr:
+            output += result.stderr
+            print(result.stderr, file=sys.stderr)
+        print(result.stdout)
+        if result.returncode != 0:
+            raise RuntimeError(error_msg.format(result.stderr or result.stdout))
+        return output
 
-    output = result.stdout
-    if result.stderr:
-        output += result.stderr
-        print(result.stderr, file=sys.stderr)
+    # For long-running commands, stream output in real-time
+    print(f"Starting: {' '.join(cmd)}")
+    print("-" * 60)
 
-    print(result.stdout)
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,  # Line buffered
+        universal_newlines=True,
+    )
 
-    if result.returncode != 0:
-        raise RuntimeError(error_msg.format(result.stderr or result.stdout))
+    output_lines: list[str] = []
+
+    # Stream output in real-time
+    if process.stdout is not None:
+        for raw_line in process.stdout:
+            line = raw_line.rstrip("\n")
+            output_lines.append(line)
+            print(line)
+            sys.stdout.flush()
+
+    # Wait for process to complete
+    returncode = process.wait()
+
+    print("-" * 60)
+
+    output = "\n".join(output_lines)
+
+    if returncode != 0:
+        raise RuntimeError(error_msg.format(output))
 
     return output
 
