@@ -4,62 +4,157 @@ This repository contains scripts for testing model quantizations via llama-bench
 
 ## Requirements
 
-- `python`, preferably 3.14 but the script should work with older versions too.
-- `llama-bench` and `llama-quantize` from `llama.cpp` project - should be available system-wide, for local installs add the directory to PATH before running the script.
-- Raw model weights to be quantized and tested, either in HuggingFace format or GGUF - i've tested the script with Qwen3-4B.
+- `python`, version 3.13 or higher
+- `llama-bench` and `llama-quantize` from `llama.cpp` project - should be available system-wide, for local installs add the directory to PATH before running the script
+- Raw model weights to be quantized and tested, either in HuggingFace format or GGUF - i've tested the script with Qwen3-4B
+
+### System Requirements
+
+- **Disk space**: Approximately 2-3x the size of the original model (for intermediate quantized files)
+- **RAM**: Varies by model size (recommend 16GB+ for 7B models)
+- **CPU**: Multi-core CPU recommended for faster benchmarking
 
 If the script is pointed to a model in HuggingFace format, that model will be first converted to GGUF via [`convert_hf_to_gguf.py`](https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/convert_hf_to_gguf.py) script from [`llama.cpp`](https://github.com/ggml-org/llama.cpp) repository. That script will be automatically downloaded, no additional action by the user is necessary.
 
-It's strongly recommended to create a virtualenv for running the script:
+## Installation
 
-- `python -m venv .venv` for global Python installs
-- `uv venv` when using `uv`
+### Prerequisites
 
-Afterwards, activate the virtualenv by sourcing the activation script in `.venv/bin` (dependent on the shell you're using)
+Ensure you have Python 3.13+ and `llama-bench`/`llama-quantize` from llama.cpp installed and available in your PATH.
+
+### Setup
+
+It's strongly recommended to create a virtual environment for running the script:
+
+**Using uv (recommended):**
+```bash
+# Create virtual environment
+uv venv
+
+# Activate virtual environment
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+uv sync
+```
+
+**Using standard Python venv:**
+```bash
+# Create virtual environment
+python -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -e .
+```
 
 ## Usage
 
-`python llama-quant-bench.py`
+```bash
+python llama_quant_bench.py --model <path>
+```
 
 ### Required arguments
 
-- `--model <path to directory with raw model weights from huggingface, or GGUF file>`
+- `--model <path>` - Path to directory with raw model weights from HuggingFace, or path to a GGUF file
 
-Model name will be inferred from directory name (in case of HuggingFace model format) or GGUF name.
+Model name will be inferred from directory name (in case of HuggingFace model format) or GGUF filename.
 
 ### Optional arguments
 
-- `--quant-dir <path to directory where generated quants will be placed>` - by default, script creates a temporary directory (via `tempdir` module) for all the quants.
-- `--model-name <model name>` - this can be used to override the model name, instead of using the name of directory with weights or GGUF file name.
-- `--keep-quants` - keep generated quants after benchmarking (only useful with `--quant-dir`).
-- `--keep-original-gguf` - keep the original GGUF file after converting from HuggingFace format (only useful with `--quant-dir`).
-- `--quants <list of quantization types to benchmark, separated by commas>` - by default, script will test all the available quants. This argument can be used to test only a subset.
-- `--output <path to output file>` - by default, the output will be placed in `quant-benchmark-report.md` file in current working directory.
-- `--group <quant|test>` - group results by quantization type or test type (default: `quant`). When grouped, horizontal separators are added between groups in the table.
+- `--quant-dir <path>` - Directory where generated quants will be placed (default: temporary directory)
+- `--model-name <name>` - Override the model name (instead of using directory name or GGUF filename)
+- `--keep-quants` - Keep generated quants after benchmarking (only useful with `--quant-dir`)
+- `--keep-original-gguf` - Keep the original GGUF file after converting from HuggingFace (only useful with `--quant-dir`)
+- `--quants <list>` - Comma-separated list of quantization types to benchmark (default: all available)
+- `--output <path>` - Path to output file (default: `quant-benchmark-report.md`)
+- `--group <quant|test>` - Group results by quantization type or test type (default: `quant`)
+- `--perplexity-tests <values>` - Comma-separated list of perplexity test values (default: `512,1024,2048`)
+- `--token-generation-tests <values>` - Comma-separated list of token generation test values (default: `128,256,512`)
 
 **Note:** The `--keep-quants` and `--keep-original-gguf` flags require `--quant-dir` to be set. When using a temporary directory (default behavior), all files are always deleted after benchmarking.
 
 Remaining arguments will be passed to `llama-bench` for each benchmark (except `--model`, `-h`, `--help`, `--list-devices` which will be filtered out).
+
 For a list of available quantizations to put in `--quants`, run `llama-quantize --help`.
 For `--quants` argument, you can use either the names (e.g. `Q5_K,Q4_K,Q3_K_S` - letter case does not matter) or IDs (e.g. `17,15,11`), but they should not be mixed (e.g. `17,Q4_K` will throw an error).
+
+### Examples
+
+```bash
+# Benchmark all quantizations for a HuggingFace model
+python llama_quant_bench.py --model /path/to/hf-model
+
+# Benchmark specific quantizations for a GGUF file
+python llama_quant_bench.py --model /path/to/model.gguf --quants Q4_K,Q5_K
+
+# Keep quantized files in a specific directory
+python llama_quant_bench.py --model /path/to/model --quant-dir ./quants --keep-quants
+
+# Group results by test type instead of quantization
+python llama_quant_bench.py --model /path/to/model --group test
+
+# Custom perplexity and token generation tests
+python llama_quant_bench.py --model /path/to/model --perplexity-tests 256,512 --token-generation-tests 64,128
+
+# Pass additional arguments to llama-bench (e.g., use 8 threads)
+python llama_quant_bench.py --model /path/to/model -t 8
+```
 
 ## Generated report
 
 The script will report progress (and the output from used tools) on standard output, and after performing all the benchmarks it will produce a comprehensive report in Markdown format.
+
 The following shows that report's structure:
 
-```md
+```markdown
 # llama-quant-benchmark for `<model name>` (`<amount of model parameters>`)
 
-| Quantization | Model size |  Test | Tokens/second |
+| Quantization | Model size | Test  | Tokens/second |
 |--------------|------------|-------|---------------|
-|     QX_A     |  S.SS GiB  | pp512 | AAAA +/- B.BB |
-|     QX_A     |  S.SS GiB  | tg128 | CCCC +/- D.DD |
+|     QX_A     |  S.SS GiB  | pp512 | AAAA ± B.BB   |
+|     QX_A     |  S.SS GiB  | tg128 | CCCC ± D.DD   |
 |--------------|------------|-------|---------------|
-|     QY_B     |  S.SS GiB  | pp512 | EEEE +/- F.FF |
-|     QY_B     |  S.SS GiB  | tg128 | GGGG +/- H.HH |
+|     QY_B     |  S.SS GiB  | pp512 | EEEE ± F.FF   |
+|     QY_B     |  S.SS GiB  | tg128 | GGGG ± H.HH   |
 
 Generated on `<current date/time>`
 Used backend: `<backend used by llama-bench>`
 Additional `llama-bench` arguments: `<user-provided arguments to llama-bench>`
 ```
+
+## Troubleshooting
+
+### llama-quantize not found
+
+Ensure that `llama-quantize` and `llama-bench` from the llama.cpp project are built and available in your PATH. You can verify this by running:
+```bash
+which llama-quantize
+which llama-bench
+```
+
+### Conversion fails
+
+If converting from HuggingFace format fails:
+- Ensure the model directory contains valid HuggingFace format files (`config.json`, `model.safetensors` or `pytorch_model.bin`, etc.)
+- Check that you have sufficient disk space (2-3x the model size)
+- Verify your internet connection (the converter script is downloaded from GitHub)
+
+### Out of memory errors
+
+If you encounter OOM errors during benchmarking:
+- Reduce perplexity test values: `--perplexity-tests 256,512`
+- Reduce token generation test values: `--token-generation-tests 64,128`
+- Use smaller quantization types
+
+### Slow performance
+
+- Use `--quant-dir` with an SSD for faster I/O
+- Ensure your CPU supports the optimizations used by llama.cpp
+- Pass thread count to llama-bench: `-t 8`
+
+## License
+
+This project is licensed under the AGPL v3 License - see the [LICENSE](LICENSE) file for details.
